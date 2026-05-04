@@ -1,0 +1,527 @@
+---
+title: "AhR-RNAseq-patient-analysis"
+author: "Adam Sorbie"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysis of RNAseq AHR 
+
+Load libraries with PACMAN
+```{r}
+pacman::p_load("DESeq2", "GenomicFeatures", "org.Hs.eg.db", "AnnotationDbi", "tidyverse",
+               "ComplexHeatmap", "apeglm", "RColorBrewer", "EnhancedVolcano", "viridis",
+               "readxl", "xlsx", "circlize", "ggpubr")
+source("../scripts/RNAseq_functions.R")
+```
+
+### Data Loading and Preprocessing
+
+First, we load the metadata and expression data, then filter for the samples of interest.
+
+```{r}
+# Load metadata
+metadata <- read.csv("../data/meta.csv")
+
+# Display the metadata structure
+str(metadata)
+
+# Filter metadata for LPS stimulated and male samples
+metadata_all <- metadata %>% 
+   filter(stimulated == "LPS" & gender == "m")
+metadata_24h <- metadata %>% 
+  filter(stimulated == "LPS" & gender == "m" & time != "72h")
+
+metadata_72h <- metadata %>% 
+  filter(stimulated == "LPS" & gender == "m" & time != "24h")
+
+# Load count data - assuming this is already processed and normalized
+counts <- read_csv("../data/rawCounts.csv") %>% 
+  select(-gene_name) %>% 
+  column_to_rownames("gene_id")
+
+# Subset counts to only include samples from filtered metadata
+counts_24h <- counts[, colnames(counts) %in% metadata_24h$sample_id]
+counts_72h <- counts[, colnames(counts) %in% metadata_72h$sample_id]
+counts_all <- counts[, colnames(counts) %in% metadata_all$sample_id]
+```
+
+### Create DESeq2 Objects
+
+Now we create DESeq2 objects for both time points.
+
+```{r}
+# Create colData dataframes with matching sample order
+coldata_24h <- metadata_24h %>%
+  column_to_rownames("sample_id") %>%
+  .[colnames(counts_24h), ] %>% 
+  mutate(group = factor(group, levels = c("control", "stroke")))
+
+coldata_72h <- metadata_72h %>%
+  column_to_rownames("sample_id") %>%
+  .[colnames(counts_72h), ] %>% 
+  mutate(group = factor(group, levels = c("control", "stroke")))
+
+# Create DESeq2 objects
+dds_24h <- DESeqDataSetFromMatrix(
+  countData = counts_24h,
+  colData = coldata_24h,
+  design = ~ group
+)
+
+dds_72h <- DESeqDataSetFromMatrix(
+  countData = counts_72h,
+  colData = coldata_72h,
+  design = ~ group
+)
+
+# Set reference level for group variable
+dds_24h$group <- relevel(dds_24h$group, ref = "control")
+dds_72h$group <- relevel(dds_72h$group, ref = "control")
+
+# Filter low count genes
+keep_24h <- rowSums(counts(dds_24h)) >= 10
+dds_24h <- dds_24h[keep_24h,]
+
+keep_72h <- rowSums(counts(dds_72h)) >= 10
+dds_72h <- dds_72h[keep_72h,]
+
+## all timepoints 
+coldata_all <- metadata_all %>%
+  column_to_rownames("sample_id") %>%
+  .[colnames(counts_all), ] %>% 
+  mutate(group = factor(group, levels = c("control", "stroke")))
+
+# Create DESeq2 objects
+dds_all <- DESeqDataSetFromMatrix(
+  countData = counts_all,
+  colData = coldata_all,
+  design = ~ group
+)
+
+# Set reference level for group variable
+dds_24h$group <- relevel(dds_24h$group, ref = "control")
+dds_72h$group <- relevel(dds_72h$group, ref = "control")
+dds_all$group <- relevel(dds_all$group, ref = "control")
+
+# Filter low count genes
+keep_all <- rowSums(counts(dds_all)) >= 10
+dds_all <- dds_all[keep_24h,]
+```
+
+## Principal Component Analysis
+
+Let's examine the overall variation in our datasets using PCA.
+
+### PCA of all male samples by group (24h)
+
+```{r}
+# Variance stabilizing transformation
+vst_24h <- vst(dds_24h, blind = TRUE)
+
+# Extract PCA data
+pca_data_24h <- plotPCA(vst_24h, intgroup = "group", returnData = TRUE)
+
+# Create improved PCA plot
+ggplot(pca_data_24h, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 3) +
+  labs(x = paste0("PC1 [", round(100 * attr(pca_data_24h, "percentVar")[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * attr(pca_data_24h, "percentVar")[2], 1), "%]"),
+       color = "Group") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+### PCA of all samples by group (72h)
+
+```{r}
+# Variance stabilizing transformation
+vst_72h <- vst(dds_72h, blind = TRUE)
+
+# Extract PCA data
+pca_data_72h <- plotPCA(vst_72h, intgroup = "group", returnData = TRUE)
+
+# Create improved PCA plot
+ggplot(pca_data_72h, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 3) +
+  labs(x = paste0("PC1 [", round(100 * attr(pca_data_72h, "percentVar")[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * attr(pca_data_72h, "percentVar")[2], 1), "%]"),
+       color = "Group") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+### PCA of stroke samples colored by NIHSS score (24h)
+
+```{r}
+# Filter for stroke samples only
+stroke_samples_24h <- colData(vst_24h) %>%
+  as.data.frame() %>%
+  filter(group == "stroke")
+
+# Subset VST data to include only stroke samples
+vst_stroke_24h <- vst_24h[, rownames(stroke_samples_24h)]
+
+# PCA on stroke samples only
+pca_stroke_24h <- prcomp(t(assay(vst_stroke_24h)))
+
+# Create data frame for plotting
+pca_df_stroke_24h <- as.data.frame(pca_stroke_24h$x) %>%
+  rownames_to_column("SampleID") %>%
+  left_join(stroke_samples_24h %>% rownames_to_column("SampleID"), by = "SampleID")
+
+# Plot PCA colored by NIHSS score
+ggplot(pca_df_stroke_24h, aes(x = PC1, y = PC2, color = NIHSS)) +
+  geom_point(size = 4) +
+  scale_color_viridis_c(direction = -1) +  # Yellow (high) to purple (low)
+  labs(x = paste0("PC1 [", round(100 * attr(pca_df_stroke_24h, "percentVar")[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * attr(pca_df_stroke_24h, "percentVar")[2], 1), "%]"),
+       color = "NIHSS score") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+### PCA of stroke samples colored by NIHSS score (72h)
+
+```{r}
+# Filter for stroke samples only
+stroke_samples_72h <- colData(vst_72h) %>%
+  as.data.frame() %>%
+  filter(group == "stroke")
+
+# Subset VST data to include only stroke samples
+vst_stroke_72h <- vst_72h[, rownames(stroke_samples_72h)]
+
+# PCA on stroke samples only
+pca_stroke_72h <- prcomp(t(assay(vst_stroke_72h)))
+
+# Create data frame for plotting
+pca_df_stroke_72h <- as.data.frame(pca_stroke_72h$x) %>%
+  rownames_to_column("SampleID") %>%
+  left_join(stroke_samples_72h %>% rownames_to_column("SampleID"), by = "SampleID")
+
+# Plot PCA colored by NIHSS score
+ggplot(pca_df_stroke_72h, aes(x = PC1, y = PC2, color = NIHSS)) +
+  geom_point(size = 4) +
+  scale_color_viridis_c(direction = -1) +  # Yellow (high) to purple (low)
+  labs(x = paste0("PC1 [", round(100 * attr(pca_df_stroke_72h, "percentVar")[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * attr(pca_df_stroke_72h, "percentVar")[2], 1), "%]"),
+       color = "NIHSS score") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+## PCA all timepoints 
+
+```{r}
+# Variance stabilizing transformation
+vst_all <- vst(dds_all, blind = TRUE)
+# Extract PCA data
+pca_data_all <- plotPCA(vst_all, intgroup = c("group","time"), returnData = TRUE)
+
+# Create improved PCA plot
+ggplot(pca_data_all, aes(x = PC1, y = PC2, color = group.1, shape=time)) +
+  geom_point(size = 3) +
+  labs(x = paste0("PC1 [", round(100 * attr(pca_data_all, "percentVar")[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * attr(pca_data_all, "percentVar")[2], 1), "%]"),
+       color = "Group") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+
+```{r}
+# Filter for stroke samples only
+stroke_samples <- colData(vst_all) %>%
+  as.data.frame() %>%
+  filter(group == "stroke")
+
+# Subset VST data to include only stroke samples
+vst_stroke_all <- vst_all[, rownames(stroke_samples)]
+
+# PCA on stroke samples only
+pca_stroke_all <- prcomp(t(assay(vst_stroke_all)))
+
+# Create data frame for plotting
+pca_stroke_all_df <- as.data.frame(pca_stroke_all$x) %>%
+  rownames_to_column("SampleID") %>%
+  left_join(stroke_samples %>% rownames_to_column("SampleID"), by = "SampleID")
+
+percentVar <- pca_stroke_all$sdev^2 / sum(pca_stroke_all$sdev^2)
+
+# Plot PCA colored by NIHSS score
+ggplot(pca_stroke_all_df, aes(x = PC1, y = PC2, color = NIHSS, shape=time)) +
+  geom_point(size = 4) +
+  scale_color_viridis_c(direction = 1) +  # Yellow (high) to purple (low)
+  labs(x = paste0("PC1 [", round(100 * percentVar[1], 1), "%]"),
+       y = paste0("PC2 [", round(100 * percentVar[2], 1), "%]"),
+       color = "NIHSS score") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+ggsave("PCA_stroke_samples_all-2026.pdf", width = 5, height = 3.5, dpi = 300)
+```
+
+
+## Differential Expression Analysis
+
+Now we perform differential expression analysis to identify genes that are differentially expressed between stroke and control samples.
+
+```{r}
+# Run DESeq2 analysis
+dds_24h <- DESeq(dds_24h)
+res_24h <- results(dds_24h, contrast = c("group", "stroke", "control"), 
+                   independentFiltering = TRUE, alpha = 0.05)
+
+dds_72h <- DESeq(dds_72h)
+res_72h <- results(dds_72h, contrast = c("group", "stroke", "control"), 
+                   independentFiltering = TRUE, alpha = 0.05)
+
+dds_all <- DESeq(dds_all)
+res_all <- results(dds_all, contrast = c("group", "stroke", "control"), 
+                   independentFiltering = TRUE, alpha = 0.05)
+
+# Annotate results
+res_24h_annot <- annotate_degs(org.Hs.eg.db, res_24h, keys = rownames(res_24h), 
+                               keytype = "ENSEMBL", multivals = "first")
+res_24h_df <- as.data.frame(res_24h_annot)
+
+res_72h_annot <- annotate_degs(org.Hs.eg.db, res_72h, keys = rownames(res_72h), 
+                               keytype = "ENSEMBL", multivals = "first")
+res_72h_df <- as.data.frame(res_72h_annot)
+
+res_all_annot <- annotate_degs(org.Hs.eg.db, res_all, keys = rownames(res_all), 
+                               keytype = "ENSEMBL", multivals = "first")
+res_all_df <- as.data.frame(res_all_annot)
+
+# Summary of results
+summary(res_24h, alpha = 0.05)
+summary(res_72h, alpha = 0.05)
+summary(res_all, alpha = 0.05)
+```
+
+### Volcano Plot (24h)
+
+```{r}
+prettyVolcano(
+  res_24h_df,
+  lfc_thresh = 1,
+  pval_thresh = 0.1,
+  contrast = c("control", "stroke"),
+  gene_names = "gene_symbol",
+  xlim = c(-10, 10),
+  ylim = c(0, 4),
+  downreg_col = "#6D6D6F",
+  upreg_col = "#FFA845",
+  pointSize = 3,
+  drawConnectors = TRUE,
+  max.overlaps = 20
+)
+```
+
+### Volcano Plot (72h)
+
+```{r}
+prettyVolcano(
+  res_72h_df,
+  lfc_thresh = 1,
+  pval_thresh = 0.1,
+  contrast = c("control", "stroke"),
+  gene_names = "gene_symbol",
+  xlim = c(-10, 10),
+  ylim = c(0, 4),
+  downreg_col = "#6D6D6F",
+  upreg_col = "#FFA845",
+  pointSize = 3,
+  drawConnectors = TRUE,
+  max.overlaps = 20
+)
+```
+
+```{r}
+# write.xlsx(res_24h_df, file="log2FC_stroke_monocytes.xlsx", sheetName="controlvsstroke24h", row.names=FALSE)
+# write.xlsx(res_72h_df, file="log2FC_stroke_monocytes_72.xlsx", sheetName="controlvsstroke72h", append=TRUE, row.names=FALSE)
+# write.xlsx(res_all_df, file="log2FC_stroke_monocytes_all.xlsx", sheetName="controlvsstrokealltp", append=TRUE, row.names=FALSE)
+```
+
+
+## Heatmap of Gene Panel
+
+Now we'll create a heatmap using the gene panel from the provided Excel file, focused only on stroke samples and ordered by NIHSS score.
+
+```{r}
+# Load gene panel
+ahr_gene_panel <- read_excel("../data/mmc2 (4).xlsx")
+ahr_gene_panel$Gene <- str_to_sentence(ahr_gene_panel$Gene)  # Convert to sentence case
+
+# metadata
+stroke_samples <- colData(vst_stroke_all) %>%
+  as.data.frame() %>%
+  filter(group == "stroke") %>%
+  arrange(NIHSS)
+
+# Convert Entrez to Ensembl
+ensembl_ids <- mapIds(org.Hs.eg.db,
+                      keys = as.vector(as.character(ahr_gene_panel$`Entrez ID`)),
+                      column = "ENSEMBL",
+                      keytype = "ENTREZID",
+                      multiVals = "first")
+
+detected_ahr <- ensembl_ids[ensembl_ids %in%  rownames(vst_stroke_all)]
+
+# Extract data for panel genes
+vst_ahr_panel <- vst_stroke_all[detected_ahr, ]
+
+# Set gene symbols as row names
+rownames(vst_ahr_panel) <- res_all_df %>%
+  rownames_to_column("ensembl") %>% 
+  filter(ensembl %in% detected_ahr) %>%
+  pull(gene_symbol)
+
+# Calculate Z-scores
+vst_panel_z <- t(scale(t(assay(vst_ahr_panel))))
+
+# Create annotation data
+ha <- HeatmapAnnotation(
+  Time = stroke_samples$time,
+  NIHSS = stroke_samples$NIHSS,
+  col = list(
+    Time = c("24h" = "#3498db", "72h" = "#e74c3c"),
+    NIHSS = colorRamp2(c(min(stroke_samples$NIHSS), 
+                        mean(stroke_samples$NIHSS), 
+                        max(stroke_samples$NIHSS)), 
+                      viridis(3, direction = -1))
+  ),
+  show_legend = TRUE
+)
+
+# Create the heatmap with k-means clustering
+Heatmap(vst_panel_z, 
+        name = "Z-score",
+        top_annotation = ha,
+        column_split = stroke_samples$time,
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,  # Columns already ordered by NIHSS
+        column_title = "Stroke Patients",
+        row_title = "Gene Panel",
+        km = 5,  # k-means with 3 clusters
+        column_order = rownames(stroke_samples),
+        row_names_gp = gpar(fontsize = 5.5),
+        heatmap_legend_param = list(title = "Z-score\nexpression"))
+```
+Correlations 
+
+```{r}
+key_ahr_genes <- c("AHR", "CYP1A1", "CYP1B1", "AHRR")
+df_ahr_genes <- assay(vst_ahr_panel)[key_ahr_genes, ]
+df_ahr_genes <- df_ahr_genes %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_symbol") %>%
+  pivot_longer(-(gene_symbol), names_to = "sample_id", values_to = "expression") 
+
+# add metadata 
+df_ahr_genes <- df_ahr_genes %>%
+  left_join(metadata_all %>% select(sample_id, NIHSS, time), by = "sample_id")
+```
+
+Plot gene expression vs NIHSS score stratified by time
+
+```{r}
+for (i in key_ahr_genes){
+  sub <- df_ahr_genes %>% 
+    filter(gene_symbol == i)
+  p <- ggscatter(sub, x = "NIHSS", y = "expression", 
+                            color = "time", facet.by = "time",
+                            add = "reg.line", conf.int = T,
+                            add.params = list(color = "black", fill = "lightgray"),
+                            xlab = "NIHSS Score", ylab = paste0(i, " Expression")) +
+    stat_cor(method = "pearson") +
+    ggtitle(paste0("Correlation of ", i, " with NIHSS Score"))
+  print(p)
+}
+```
+
+
+# Heatmap of AhR target genes
+
+```{r}
+ahr_target_genes <-readxl::read_excel("../data/mmc2 (4).xlsx")
+ahr_target_genes$Gene <- str_to_sentence(ahr_target_genes$Gene)
+```
+
+```{r}
+ahr_target_genes_ensembl <- res_df %>% 
+  filter(gene_symbol %in% ahr_target_genes$Gene) %>% 
+  rownames()
+rld_mat_ahr <- rld_mat[ahr_target_genes_ensembl, ]
+rownames(rld_mat_ahr) <- res_df %>% 
+  filter(gene_symbol %in% ahr_target_genes$Gene) %>% 
+  pull(gene_symbol)
+```
+
+```{r}
+# scale matrix and plot
+rld_mat_ahr_z <- calc_z_score(rld_mat_ahr)
+# some have zero-variance so replace with 0 (need to check why this is)
+rld_mat_ahr_z[is.na(rld_mat_ahr_z)] <- 0
+Heatmap(rld_mat_ahr_z, top_annotation = hmap_annot, column_split = groups_hmap, border = "black", 
+        cluster_column_slices = F)
+```
+
+## Deconvolution 
+
+
+```{r}
+library(immunedeconv)
+
+```
+
+```{r}
+counts_deconv <- annotate_degs(org.Hs.eg.db, counts_all, keys = rownames(counts_all), 
+                               keytype = "ENSEMBL", multivals = "first")
+
+```
+
+
+```{r}
+counts_deconv <- counts_deconv %>% 
+  drop_na(gene_symbol) %>%
+  rownames_to_column("ensembl") %>%
+  distinct(gene_symbol, .keep_all = TRUE) %>%
+  select(-c(ensembl, entrez, `gene name`)) %>%
+  column_to_rownames("gene_symbol")
+
+```
+
+
+```{r}
+deconv_results <- deconvolute(as.matrix(counts_deconv), method = "quantiseq")
+```
+
+
+```{r}
+deconv_results_long <- pivot_longer(deconv_results, cols = -cell_type, names_to = "sample_id", values_to = "proportion") %>%
+  left_join(metadata_all %>% select(sample_id, group, time), by = "sample_id") %>% 
+  filter(group == "stroke") %>% 
+  group_by(cell_type, time) %>%
+  mutate(mean_prop = mean(proportion) * 100) %>% 
+  ungroup
+write.csv(deconv_results_long, "deconvolution_results.csv", row.names = FALSE)
+```
+
+

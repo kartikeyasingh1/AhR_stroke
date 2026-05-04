@@ -1,0 +1,386 @@
+---
+title: "16S analysis template"
+author: "Adam Sorbie"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Microbiota analysis
+
+This document contains a template for conducting routine analysis of microbiota data (16S rRNA sequencing).
+
+## Set project directories
+
+```{r set-directories}
+scripts_dir <- "../scripts/"
+data_dir <- "../data/"
+```
+
+## Load libraries
+
+```{r load-libraries, warning=FALSE, message=FALSE}
+# download latest version of analysis script and source 
+if (!file.exists(paste0(scripts_dir,"/analysis_functions.R"))){
+  download.file("https://raw.githubusercontent.com/adamsorbie/Stroke_Microbiota_reproducibility/main/scripts/analysis_functions.R", destfile = paste0(scripts_dir,"/analysis_functions.R"))
+}
+
+source( paste0(scripts_dir,"/analysis_functions.R"))
+# put other functions in benakis lab repo
+devtools::source_url("https://raw.githubusercontent.com/adamsorbie/BenakisLab/main/16S/analysis/helper_functions_microbiome.R")
+## additional libraries
+pacman::p_load(microViz, microbiome, microbiomeutilities, cowplot, shiny, conflicted, plotly)
+conflict_prefer_all("rstatix")
+conflict_prefer_all("purrr")
+```
+
+## Set project attributes
+
+Fill the details accordingly.
+
+**Project title** : Analysis of 16S sequencing from AhR KO mice and controls\
+**Main author** : Adam Sorbie\
+**Principal Investigator (s)** : Corinne Benakis
+
+```{r set-seed}
+set.seed(42)
+```
+
+```{r set-attributes}
+# palette for categories 
+cat.palette <- c("#FF3030", "#1E90FF", "#2C6E49", "#F0C808", "#EEF0F2")
+stacked_bar.palette <- c("#E64B35FF", "#4DBBD5FF", "#00A087FF", "#3C5488FF", "#F39B7FFF", 
+                         "#8491B4FF", "#91D1C2FF", "#DC0000FF", "#7E6148FF", "#B09C85FF", 
+                         "#E4E9B2", "#F9A620", "#054A29", "#52414C")
+
+hm.palette <-  RColorBrewer::brewer.pal(9, "RdBu")
+```
+
+```{r setup-2, warning=FALSE, message=FALSE}
+dir.create("QC", showWarnings = F)
+dir.create("Processed-Data", showWarnings = F)
+dir.create("Alpha-Diversity", showWarnings = F)
+dir.create("Beta-Diversity", showWarnings = F)
+dir.create("Taxonomic-Composition", showWarnings = F)
+dir.create("Differential-Abundance", showWarnings = F)
+dir.create("Other", showWarnings = F)
+```
+
+## Load data
+
+This code chunk reads the input files and creates a phyloseq object.
+
+```{r load-data, warning=FALSE, message=FALSE, echo=FALSE}
+ps <- import_as_pseq(asvtab = paste0(data_dir, "dada2_out/ASV_seqtab_tax.tab"),
+                mapping = paste0(data_dir, "metadata_AhR_KO_16S.txt"),
+                tree = paste0(data_dir, "dada2_out/ASV_tree.tre"))
+```
+
+## QC {.tabset}
+
+### Distribution of reads
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+qc_plot <- plot_read_distribution(ps, groups ="group", 
+    plot.type = "density") + theme_cowplot()
+qc_plot
+ggsave("./QC/ReadDistribution.pdf")
+```
+
+### Library sizes (histogram)
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+pdf("QC/Library_size.pdf")
+barplot(sort(sample_sums(ps)), horiz = TRUE, las = 2, xlab=NULL, main="Library sizes")
+hist(sort(sample_sums(ps)), las = 2)
+dev.off()
+```
+
+### Rarefaction curve
+
+```{r,warning=FALSE, message=FALSE, echo=FALSE}
+pdf("QC/rarefaction_curve.pdf")
+mat <- otu_table(ps)
+class(mat) <- "matrix"
+rcurve <- vegan::rarecurve(t(mat), step=50, cex=0.5)
+dev.off()
+```
+
+### ASV variance
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+Variance.plot <- qplot(log10(apply(otu_table(ps), 1, var)), 
+                         xlab = "log10(variance)", 
+                         main = "Variance in OTUs") + 
+  ggtitle("Before filtering") + theme_cowplot()
+
+print(Variance.plot)
+
+ggsave("QC/Variance.pdf")
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+ps_filt <- prune_taxa(taxa_sums(ps) > 5000, ps)
+
+Variance.plot <- qplot(log10(apply(otu_table(ps_filt), 1, var)), 
+                         xlab = "log10(variance)", 
+                         main = "Variance in OTUs") + 
+  ggtitle("After filtering") + theme_cowplot()
+
+print(Variance.plot)
+
+ggsave("QC/Variance_filtered.pdf")
+```
+
+Remember to adjust normalisation with the filtered phyloseq object here if necessary!
+
+## Normalisation {.tabset}
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+ps_norm <- transform(ps, transform = "mss")
+ps_rel <- transform(ps, transform = "relative")
+save(ps_norm, ps_rel, file = "Processed-Data/normalised_ps.Rdata")
+```
+
+```{r}
+ps_naive_wt <- subset_samples(ps, group != "KO")
+ps_naive_ko <- subset_samples(ps, group != "WT")
+ps_wt_ko <- subset_samples(ps, group != "naive")
+```
+
+## Alpha diversity {.tabset}
+
+### All groups
+
+```{r fig.height=6, fig.width=4, warning=FALSE, message=FALSE, echo=FALSE}
+alpha_div <- calc_alpha(ps_norm)
+meta <-meta_to_df(ps_norm)
+# merge alpha diversity df and metadata by rownames (0)
+alpha_div_meta <- merge(alpha_div, meta, by=0)
+```
+
+```{r}
+comps <- microbiomeutilities::make_pairs(alpha_div_meta$group)
+colours <- cat.palette[c(2,3,4)]
+names(colours) <- c("KO", "naive", "WT")
+metrics <- c("Richness", "Shannon.Effective", "Faiths.PD")
+```
+
+```{r}
+for (i in metrics){
+  p <- plot_boxplot(df = alpha_div_meta, variable_col = "group", value_col = i, 
+             fill_var = "group", comparisons_list = comps, xlab = "group", 
+             ylab = i, p_title = "", multiple_groups = T,
+             cols = colours, group.order = c("naive","WT", "KO")) +
+  theme(axis.text = element_text(size=16))
+  name <- paste0("Alpha-Diversity/", gsub("\\.", "_",i), ".pdf")
+  ggsave(filename = name,plot=p, device = "pdf",dpi = 300, height=4, width=4.25)
+  print(p)
+}
+
+```
+
+### KO vs WT
+
+AhR KO and WT mice were from the same litter, however naive were housed separately.
+
+```{r}
+ps_wt_ko <- subset_samples(ps_norm, group != "naive")
+```
+
+```{r}
+alpha_div_ahr <- calc_alpha(ps_wt_ko)
+meta_ahr <-meta_to_df(ps_wt_ko)
+# merge alpha diversity df and metadata by rownames (0)
+alpha_div_ahr <- merge(alpha_div_ahr, meta_ahr, by=0)
+```
+
+```{r}
+for (i in metrics){
+  p <- plot_boxplot(df = alpha_div_ahr, variable_col = "group", value_col = i, 
+             fill_var = "group", comparisons_list = list(c("WT", "KO")), xlab = "group", 
+             ylab = i, p_title = "", 
+             cols = colours, group.order = c("WT", "KO")) +
+  theme(axis.text = element_text(size=16))
+  name <- paste0("Alpha-Diversity/", gsub("\\.", "_",i), "_ahr.pdf")
+  ggsave(filename = name,plot=p, device = "pdf",dpi = 300, height=4, width=4.25)
+  print(p)
+}
+```
+
+## Beta Diversity (Ordinations) {.tabset}
+
+#### Bray-Curtis distance PCoA
+
+```{r BC-NMDS, fig.height=4, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+bc <- calc_betadiv(ps_norm, dist = "bray", ord_method = "NMDS")
+plot_bc <- plot_beta_div(ps_norm, dist_matrix = bc$Distance_Matrix, ordination = bc$Ordination, 
+              group_variable = "group", cols = colours)
+ggsave("Beta-Diversity/bray-curtis_plot.pdf", plot = plot_bc, device = "pdf", height=5, width=6)
+```
+
+#### GUnifrac distance PCoA
+
+fix issue with fig size
+
+```{r gunifrac-NMDS, fig.height=4, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+gu <- calc_betadiv(ps_norm, dist = "gunifrac", ord_method = "NMDS")
+p_gu <- plot_beta_div(ps_norm,dist_matrix = gu$Distance_Matrix, ordination = gu$Ordination, 
+              group_variable = "group", cols = colours)
+ggsave("Beta-Diversity/gunifrac_plot.pdf", plot = p_gu, device = "pdf", height=5, width=6)
+```
+
+#### Aitchison 
+
+```{r}
+aitch <- calc_betadiv(ps, dist = "aitchison", ord_method = "NMDS")
+p_aitch <- plot_beta_div(ps,dist_matrix = aitch$Distance_Matrix, ordination = aitch$Ordination, 
+              group_variable = "group", cols = colours)
+p_aitch
+#ggsave("Beta-Diversity/aitchison_plot.pdf", plot = p_aitch, device = "pdf", height=5, width=6)
+```
+### AhR mice only - Betadiv
+
+#### Bray-Curtis distance PCoA
+
+```{r BC-NMDS, fig.height=4, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+bc_ahr <- calc_betadiv(ps_wt_ko, dist = "bray", ord_method = "NMDS")
+p_bc_ahr <- plot_beta_div(ps_wt_ko, dist_matrix = bc_ahr$Distance_Matrix, ordination = bc_ahr$Ordination, 
+              group_variable = "group", cols = colours)
+ggsave("Beta-Diversity/bray-curtis_plot_ahr.pdf", plot = p_bc_ahr, device = "pdf", height=5, width=6)
+```
+
+#### GUnifrac distance PCoA
+
+fix issue with fig size
+
+```{r gunifrac-NMDS, fig.height=4, fig.width=8, warning=FALSE, message=FALSE, echo=FALSE}
+gu_ahr <- calc_betadiv(ps_wt_ko, dist = "gunifrac", ord_method = "NMDS")
+p_gu_ahr <- plot_beta_div(ps_wt_ko,dist_matrix = gu_ahr$Distance_Matrix, ordination = gu_ahr$Ordination, 
+              group_variable = "group", cols = colours)
+ggsave("Beta-Diversity/gunifrac_plot_ahr.pdf", plot = p_gu_ahr, device = "pdf", height=5, width=6)
+```
+
+#### Aitchison 
+
+```{r}
+aitch <- calc_betadiv(ps_wt_ko, dist = "aitchison", ord_method = "NMDS")
+p_aitch <- plot_beta_div(ps_wt_ko,dist_matrix = aitch$Distance_Matrix, ordination = aitch$Ordination, 
+              group_variable = "group", cols = colours)
+p_aitch
+ggsave("Beta-Diversity/aitchison_plot_ahr.pdf", plot = p_aitch, device = "pdf", height=5, width=6)
+```
+## Taxonomic composition {.tabset}
+
+Batch 2 -
+
+remaining analyses could focus on differential taxa -
+
+```{r}
+taxa <- c("Bacteroidaceae", "Muribaculaceae", "Prevotellaceae", "Rikenellaceae", "Bacteroidales Order", "Bacteria Kingdom", "Bacteroidia Class", "Lactobacillaceae", "Lachnospiraceae", "Oscillospiraceae", "Ruminococcaceae", "Akkermansiaceae")
+
+tax_col <- c(taxa,"other")
+
+pal_fig <- pal_npg()(10)
+pal_fig <- c(pal_fig, "#E4E9B2", "#F9A620","#52414C", "#054A29", "#DCDCDC")
+names(pal_fig) <- tax_col
+ps_norm_f <- phylosmith::set_sample_order(ps_wt_ko, treatment = "group") %>% 
+  aggregate_taxa(level="Family")
+
+fig <- ps_norm_f %>% 
+  tax_fix(unknowns = c("")) %>%
+  ps_arrange(desc(Akkermansiaceae), .target = "otu_table") %>% 
+  comp_barplot(
+    tax_level = "Family", n_taxa = 10,
+    bar_outline_colour = "black", bar_width = 0.9, palette = pal_fig) + 
+  theme_cowplot() +
+  facet_grid(.~factor(group, rev(stringr::str_sort(unique(group)))),
+    scales = "free", space = "free" # these options are critically important!
+  ) + 
+  scale_y_continuous(labels = scales::percent, expand = c(0,0)) +
+  theme(
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=22),
+        axis.text.y = element_text(size=18),
+        axis.ticks = element_blank())
+fig + 
+  rotate_x_text(angle=45)
+ggsave2("Taxonomic-Composition/genus_level_comp10.pdf",, device = "pdf", height=5, width=6)
+```
+
+## Differential abundance {.tabset}
+
+
+
+WT vs naive
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+res_wt_naive <- ancombc2(
+      data = format_taxonomy(ps_naive_wt),
+      fix_formula = "group",
+      p_adj_method = "BH",
+      prv_cut = 0.33,
+      group = "group",
+      struc_zero = TRUE,
+      neg_lb = FALSE,
+      pseudo_sens = T,
+      global = FALSE
+    )
+```
+
+```{r}
+plot_da(ancom_res, groups=c("Sham", "Stroke"), cols = colours)
+```
+
+KO vs naive
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+res_ko_naive <- ancombc2(
+      data = format_taxonomy(ps_naive_ko),
+      fix_formula = "group",
+      p_adj_method = "BH",
+      prv_cut = 0.33,
+      group = "group",
+      struc_zero = TRUE,
+      neg_lb = FALSE,
+      pseudo_sens = T,
+      global = FALSE
+    )
+```
+
+```{r}
+plot_da(ancom_res, groups=c("Sham", "Stroke"), cols = colours)
+```
+
+WT vs KO
+
+No global difference between WT and AhR KO
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+res_wt_ko <- ancombc2(
+      data = format_taxonomy(ps_wt_ko),
+      fix_formula = "group",
+      p_adj_method = "BH",
+      prv_cut = 0.33,
+      group = "group",
+      struc_zero = TRUE,
+      neg_lb = FALSE,
+      pseudo_sens = T,
+      global = FALSE
+    )
+```
+
+No Entero detected 
+
+```{r session-info}
+
+sessionInfo()
+
+```

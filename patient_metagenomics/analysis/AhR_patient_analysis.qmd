@@ -1,0 +1,2706 @@
+---
+title: "AhR_patient_analysis"
+author: "Adam Sorbie"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# AhR at-risk and chronic analysis
+
+```{r, include=FALSE}
+library(gtsummary)
+library(gt)
+source("../../../Metagenomics/scripts/taxa_analysis.R")
+source("../../../Metagenomics/scripts/shotgun_analysis_utils.R")
+source("../../../Metagenomics/scripts/func_analysis.R")
+conflicted::conflict_prefer_all("dplyr")
+conflicted::conflict_prefer_all("purrr")
+```
+
+```{r}
+# list comes from here: http://eggnog5.embl.de/#/app/results#COG3033_datamenu
+indole_species <- read_csv("../../AhR_metagenomics/analysis/tnaA_encoding_taxa.csv")
+# remove those without species annotation - anything containing sp. or bacterium
+drop <- c("sp.", "bacterium") 
+indole_species <- indole_species %>% 
+  filter(!grepl(paste(drop, collapse="|"), Organism)) 
+# fix [] and add format to s__Genus_species
+indole_species <- indole_species$Organism
+
+indole_species <- gsub("\\[", "", indole_species)
+indole_species <- gsub("\\]", "", indole_species)
+
+indole_species <- gsub(" ", "_", indole_species)
+indole_species <- paste0("s__", indole_species)
+indole_species <- unique(indole_species)
+```
+
+```{r}
+load("../data/hammond_tax.RData")
+load("../data/SMB_tax.RData")
+load("../data/lledos_tax.RData")
+# Functional profiles
+load("../data/hammond_func.RData")
+load("../data/lledos_func.RData")
+cols <- c("healthy" = "#424143", "control" = "#424143", "At Risk" = "#EDEBD7", "stroke" = "#F7921E")
+```
+
+## Question 1. Do at-risk patients have higher numbers of indole-producers?
+
+```{r, include=FALSE}
+library(curatedMetagenomicData)
+```
+
+```{r}
+conditions <- c("hypertension", "T1D", "T2D", "CAD", "hypercholesterolemia","control")
+at_Risk_metadata <- sampleMetadata %>%
+  # change to grepl
+  filter(grepl(paste(conditions, collapse = "|"), study_condition)) %>%
+  filter(body_site == "stool") %>%
+  filter(age_category %in% c("senior", "adult")) %>%
+  filter(is.na(days_from_first_collection)) %>%
+  filter(antibiotics_current_use == "no") %>%
+  # filter to central Europe - consider updating this to include southern europe
+  filter(country %in% c("AUT","LUX","DEU","HUN", "SVK", "FRA"))
+```
+
+How many healthy/non-healthy samples do we have?
+
+```{r}
+table(at_Risk_metadata$disease)
+```
+
+Metacardis data
+
+```{r}
+# metacardis_meta <- at_Risk_metadata %>% 
+#   filter(study_name == "MetaCardis_2020_a") 
+#  
+# table(metacardis_meta$disease)
+```
+
+Download in chunks and save objects before uploading to cluster with
+high memory allowing us to merge
+
+```{r}
+# metacardis_diseases <- c("CAD", "CAD;T2D","healthy",  "T2D")
+# for (i in metacardis_diseases){
+#   uniref_dat <- metacardis_meta %>% 
+#     filter(disease == i) %>%
+#     returnSamples("gene_families")
+# 
+#   save(uniref_dat, file=paste0("F:/Metagenomics/", i, "_metacardis_uniref.RData"))
+# }
+```
+
+Download mpa3 data
+
+```{r}
+metaphlan_cmd3 <- at_Risk_metadata %>%
+  returnSamples("relative_abundance", rownames = "short")
+
+```
+
+```{r}
+counts_cmd3 <- assay(metaphlan_cmd3)
+tax_table <- rowData(metaphlan_cmd3)
+meta_cmd3 <- colData(metaphlan_cmd3) %>% as.data.frame() %>% 
+  mutate(CAD = case_when(grepl("CAD", disease) ~ 1,
+                         TRUE ~ 0)) %>% 
+   mutate(hypertension = case_when(grepl("hypertension", disease) ~ 1,
+                         TRUE ~ 0)) %>% 
+   mutate(diabetes = case_when(grepl("T1D", disease) ~ 1,
+                               grepl("T2D", disease) ~ 1,
+                         TRUE ~ 0)) %>% 
+  mutate(obesity = case_when(BMI > 30 ~ 1,
+                               TRUE ~ 0))
+
+
+```
+
+```{r}
+ec_cmd3 <- read_tsv("../data/unstrat/humann_genefamilies_ec_unstratified.tsv") %>% 
+  column_to_rownames("# Gene Family")
+
+# check samples are consistent
+colnames(ec_cmd3) %in% colnames(counts_cmd3)
+```
+
+Filter to only include samples also in EC data
+
+```{r}
+# keep_samples <- colnames(ec_cmd3)
+# counts_cmd3 <- counts_cmd3[, colnames(counts_cmd3) %in% keep_samples]
+# meta_cmd3 <- meta_cmd3[meta_cmd3$subject_id %in% keep_samples, ]
+```
+
+```{r}
+# colnames(tax_table) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+# ps_cmd3 <- load_phylo(asvtab = assay(metaphlan_cmd3),taxa = tax_table, mapping =meta_cmd3)
+# save(ps_cmd3, file="../data/cmd3_tax.RData")
+```
+
+```{r}
+load("../data/cmd3_tax.RData")
+```
+
+```{r}
+indole_species2 <- gsub("s__", "", indole_species)
+indole_species2 <- gsub("_", " ", indole_species2)
+df_indole_producers_cmd3 <- ps_cmd3 %>%
+  transform("relative") %>% 
+  transform("arcsin") %>% 
+  psmelt() %>% 
+  filter(grepl(paste(indole_species2, collapse = "|"), Species)) %>% 
+  mutate(OTU = gsub("species:", "", OTU))
+
+```
+
+Add At Risk column
+
+```{r}
+df_indole_producers_cmd3 <- df_indole_producers_cmd3 %>% 
+  mutate(group = case_when(disease != "healthy" ~ "At Risk",
+                           TRUE ~ disease)) %>% 
+  mutate(age_group = case_when(age < 65 & age >= 45 ~ "middle-aged",
+                               age < 45 ~ "young",
+                               age >= 65 ~ "elderly",
+                               TRUE ~ NA))
+```
+
+Create new columns for each comparison - not possible to just plot e.g.
+hypertension as here we would be plotting those with vs those without
+(who may have CAD or T2D), rather than healthy controls vs hypertension
+
+```{r}
+df_indole_producers_cmd3 <- df_indole_producers_cmd3 %>% 
+  mutate(hypertension2 = case_when(hypertension == 1 ~ "hypertension",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(diabetes2 = case_when(diabetes == 1 ~ "diabetes",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(CAD2 = case_when(CAD == 1 ~ "CAD",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(obesity2 = case_when(obesity == 1 ~ "obesity",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) 
+```
+
+Need to compare groups separately as some patients have multiple
+comorbidities
+
+can probably use map2 here to loop through conditions
+
+```{r}
+list_int_taxa_cmd3 <- unique(df_indole_producers_cmd3$OTU)
+risk_factors <- c("hypertension2", "diabetes2", "CAD2", "obesity2")
+# needs to be same length as above vector
+
+list_int_taxa_cmd3_in <- rep(list_int_taxa_cmd3, times=length(risk_factors))
+risk_factors <- rep(c("CAD2", "hypertension2", "diabetes2", "obesity2"), each=length(list_int_taxa_cmd3))
+
+indole_producer_plots_cmd3 <- map2(list_int_taxa_cmd3_in, risk_factors, function(.x, .y){
+  
+  
+  df_indole_producers_cmd3 %>%
+    filter(!is.na( .data[[ .y ]])) %>% 
+    filter(OTU == .x) %>%
+    #ggplot(aes(x = fct_relevel(group, "healthy", "At Risk"), y = Abundance, color=group)) + 
+    ggplot(aes(x = .data [[ .y ]], y = Abundance, color= .data[[ .y]])) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.1), size=3.75, alpha=0.4) + 
+    theme_cowplot() + 
+    #scale_color_manual(values = cols)+
+    scale_color_aaas() +
+    ylab(paste0(sub(".*\\|", "", .x), "\n", "Asin(sqrt(rel. abundance))")) +
+    xlab("") +
+    theme(axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+    stat_compare_means(comparisons = list(c("healthy", gsub("2","", .y,))),
+                       method = "wilcox.test",
+                       label = "p.format")
+}
+)
+
+
+indole_producer_plots_cmd3
+
+names(indole_producer_plots_cmd3) <- unique(df_indole_producers_cmd3$Species)
+#imap(indole_producer_plots_cmd3, function(.x, .y) ggsave(paste0("figures/", .y, "_cmd3__dotplot.pdf"), .x, device = "pdf", dpi=300, height = 4.5, width = 8))
+```
+
+How best to present this data - either we make one column for at Risk
+and compare healthy to at Risk, or we calculate separately for each Risk
+factor and
+
+*E. coli* is main taxon of interest
+
+Generate table with characteristics of CMD3 and plot as before with
+diseases on x-axis
+
+```{r}
+df_indole_producers_cmd3_split <- df_indole_producers_cmd3 %>%
+  # add obesity to disease column
+  mutate(disease = case_when(obesity == 1 ~ paste0(disease, ";obesity"),
+                             TRUE ~ disease)) %>% 
+  mutate(disease = case_when(age_group == "elderly" ~ paste0(disease, ";age (>65)"),
+                             TRUE ~ disease)) %>% 
+  separate_rows(disease, sep = ";") %>%
+  mutate(disease = trimws(disease)) %>% 
+# remove fatty liver
+  filter(disease != "fatty_liver") 
+```
+
+```{r}
+disease_cols <- c("healthy" = "#424143", "age (>65)" = "#B38D97", "CAD" = "#EDEBD7", "hypertension" = "#9CC4B2", "obesity" = "#F9AFAF", "T2D" = "#F9D5A7")
+comps_dis <- make_pairwise_comparisons(df_indole_producers_cmd3_split, "disease")
+comps_dis <- comps_dis[grepl("healthy", comps_dis)]
+# order alphabetically
+comps_dis <- comps_dis[order(sapply(comps_dis, function(x) x[1]))]
+
+# remove E. fergusonii and low prevalent taxa
+list_int_taxa_cmd3 <- list_int_taxa_cmd3[!list_int_taxa_cmd3 %in% c("Escherichia fergusonii", "Fusobacterium nucleatum","Desulfovibrio vulgaris","Escherichia albertii", "Escherichia sp. ESNIH1", "Porphyromonas gingivalis")]
+for (i in list_int_taxa_cmd3){
+  
+  stats_cmd3 <- df_indole_producers_cmd3_split %>%
+  mutate(disease = factor(disease, levels=c("healthy","age (>65)", "CAD", "hypertension", "obesity", "T2D"))) %>% 
+  filter(OTU == i) %>% 
+  pairwise_wilcox_test(
+          Abundance ~ disease,
+          comparisons = comps_dis,
+          p.adjust.method = "BH",
+          paired = F
+        ) %>%
+        add_significance() %>% 
+  add_xy_position(x="disease") 
+
+df_indole_producers_cmd3_split %>% 
+  filter(OTU == i) %>% 
+ggplot(aes(x = fct_relevel(disease, "healthy","age (>65)", "CAD", "hypertension", "obesity", "T2D"), y = Abundance, color= disease)) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+    theme_cowplot() + 
+    #scale_color_manual(values = cols)+
+    scale_color_manual(values = disease_cols) +
+    ylab(paste0(i, "\n Asin(sqrt(rel. abundance)) \n curatedMetagenomicData3")) +
+    xlab("") +
+    theme(axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          legend.position = "None") +
+  scale_y_continuous(limits = c(-0.1,1.1), breaks = seq(0,1, 0.2)) + 
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") +
+        stat_pvalue_manual(
+          stats_cmd3,
+          label = "p.adj",
+          hide.ns = T,
+          inherit.aes = FALSE, bracket.nudge.y = 0.05, step.increase = 0.015) + 
+  EnvStats::stat_n_text()
+ggsave(paste0("figures/", i, "_cmd3.pdf"), device = "pdf", dpi=300, height = 4.5, width = 6)
+}
+
+
+```
+
+E. coli stratified by sex 
+```{r}
+stats_e_coli_cmd3 <- df_indole_producers_cmd3_split %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D")
+  )) %>%
+  drop_na(gender) %>%
+  filter(OTU == "Escherichia coli") %>%
+  group_by(gender) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance() %>%
+  add_xy_position(x = "disease")
+
+df_indole_producers_cmd3_split %>%
+  filter(OTU == "Escherichia coli") %>%
+  drop_na(gender) %>%
+  ggplot(aes(
+    x = fct_relevel(
+      disease,
+      "healthy",
+      "age (>65)",
+      "CAD",
+      "hypertension",
+      "obesity",
+      "T2D"
+    ),
+    y = Abundance,
+    color = disease
+  )) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.15),
+    size = 3.75,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  #scale_color_manual(values = cols)+
+  scale_color_manual(values = disease_cols) +
+  ylab(paste0(i, "\n Asin(sqrt(rel. abundance)) \n curatedMetagenomicData3")) +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black"),
+  ) +
+  scale_y_continuous(limits = c(-0.1, 1.25), breaks = seq(0, 1, 0.2)) +
+  facet_wrap( ~ gender) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  stat_pvalue_manual(
+    stats_e_coli_cmd3,
+    label = "p.adj",
+    hide.ns = T,
+    inherit.aes = FALSE,
+    bracket.nudge.y = -0.2,
+    step.increase = 0.0015
+  ) +
+  EnvStats::stat_n_text() + 
+  rotate_x_text(angle=45)
+ggsave(
+  "figures/e_coli_gender_strat_cmd3.pdf",
+  device = "pdf",
+  dpi = 300,
+  height = 5,
+  width = 8.5
+)
+
+
+```
+
+##### Other indole producing taxa 
+
+```{r}
+stats_all_cmd3 <- df_indole_producers_cmd3_split %>%
+  filter(OTU %in% list_int_taxa_cmd3) %>% 
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D")
+  )) %>%
+  group_by(OTU) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance()
+```
+
+
+
+
+## Question 2. Do at-risk patients have higher levels of tryptophanase?
+
+For paper analyses we focused on EC 4.1.99.1 - tryptophanase
+
+
+Remove unmapped and ungrouped and convert to relative abundance then
+arcsin transform
+
+```{r}
+df_ec_cmd3 <- ec_cmd3 %>%
+        rownames_to_column("tmp") %>%
+        filter(!tmp %in% c(
+          "UNGROUPED", "UNMAPPED", "UNINTEGRATED"
+        )) %>%
+        column_to_rownames("tmp")
+df_ec_cmd3 <- t_df(100 * t_df(df_ec_cmd3) / colSums(df_ec_cmd3)) 
+df_ec_cmd3 <- asin_sqrt(df_ec_cmd3)
+```
+
+Merge with metdata and select tnaA column, renaming as Abundance
+
+```{r}
+df_tnaa_cmd3 <- df_ec_cmd3 %>%
+  t_df() %>% 
+  merge(meta_cmd3, by=0) %>%
+  select(c(`4.1.99.1`, disease, age,gender, hypertension, diabetes, CAD, obesity, Row.names)) %>% 
+  rename(Abundance = `4.1.99.1`)
+
+```
+
+Add At Risk column
+
+```{r}
+df_tnaa_cmd3 <- df_tnaa_cmd3 %>% 
+  mutate(group = case_when(disease != "healthy" ~ "At Risk",
+                           TRUE ~ disease)) %>% 
+  mutate(age_group = case_when(age < 65 & age >= 45 ~ "middle-aged",
+                               age < 45 ~ "young",
+                               age >= 65 ~ "elderly",
+                               TRUE ~ NA))
+```
+
+```{r}
+df_tnaa_cmd3 <- df_tnaa_cmd3 %>% 
+  mutate(hypertension2 = case_when(hypertension == 1 ~ "hypertension",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(diabetes2 = case_when(diabetes == 1 ~ "diabetes",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(CAD2 = case_when(CAD == 1 ~ "CAD",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) %>% 
+  mutate(obesity2 = case_when(obesity == 1 ~ "obesity",
+                                  disease == "healthy" ~ "healthy",
+                                  TRUE ~ NA)) 
+```
+
+```{r}
+df_tnaa_cmd3_split <- df_tnaa_cmd3 %>%
+  # add obesity to disease column
+  mutate(disease = case_when(obesity == 1 ~ paste0(disease, ";obesity"),
+                             TRUE ~ disease)) %>% 
+    mutate(disease = case_when(age_group == "elderly" ~ paste0(disease, ";age (>65)"),
+                             TRUE ~ disease)) %>% 
+  separate_rows(disease, sep = ";") %>%
+  mutate(disease = trimws(disease)) %>% 
+# remove fatty liver
+  filter(disease != "fatty_liver") 
+```
+
+```{r}
+stats_tnaa_cmd3 <- df_tnaa_cmd3_split %>%
+  mutate(disease = factor(disease, levels=c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D"))) %>% 
+  pairwise_wilcox_test(
+          Abundance ~ disease,
+          comparisons = comps_dis,
+          p.adjust.method = "BH",
+          paired = F
+        ) %>%
+        add_significance() %>% 
+  add_xy_position(x="disease") %>%
+         filter(p.adj < 0.1)
+
+df_tnaa_cmd3_split %>% 
+ggplot(aes(x = fct_relevel(disease, "healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D"), y = Abundance, color= disease)) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+    theme_cowplot() + 
+    #scale_color_manual(values = cols)+
+    scale_color_manual(values = disease_cols) +
+  scale_y_continuous(limits = c(-0.00275, 0.034), breaks = seq(0, 0.03, 0.005)) + 
+    ylab("tnaA \n Asin(sqrt(rel. abundance)) \n curatedMetagenomicData3") +
+    xlab("") +
+    theme(axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") +
+        stat_pvalue_manual(
+          stats_tnaa_cmd3,
+          label = "p.adj",
+          inherit.aes = FALSE, bracket.nudge.y = -0.002, step.increase = 0.0125) + 
+  EnvStats::stat_n_text() 
+  
+ggsave("figures/tnaA_cmd3.pdf", device = "pdf", dpi=300, height = 4.5, width = 6)
+```
+
+Stratified by gender 
+```{r}
+stats_tnaa_cmd3 <- df_tnaa_cmd3_split %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D")
+  )) %>%
+  drop_na(gender) %>%
+  group_by(gender) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance() %>%
+  add_xy_position(x = "disease")
+
+df_tnaa_cmd3_split %>%
+  drop_na(gender) %>%
+  ggplot(aes(
+    x = fct_relevel(
+      disease,
+      "healthy",
+      "age (>65)",
+      "CAD",
+      "hypertension",
+      "obesity",
+      "T2D"
+    ),
+    y = Abundance,
+    color = disease
+  )) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.15),
+    size = 3.75,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  #scale_color_manual(values = cols)+
+  scale_color_manual(values = disease_cols) +
+  scale_y_continuous(limits = c(-0.00275, 0.034), breaks = seq(0, 0.03, 0.005)) + 
+    ylab("tnaA \n Asin(sqrt(rel. abundance)) \n curatedMetagenomicData3") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black"),
+  ) +
+  facet_wrap( ~ gender) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  stat_pvalue_manual(
+    stats_tnaa_cmd3,
+    label = "p.adj",
+    hide.ns = T,
+    inherit.aes = FALSE,
+    bracket.nudge.y = -0.2,
+    step.increase = 0.0015
+  ) +
+  EnvStats::stat_n_text() + 
+  rotate_x_text(angle=45)
+
+ggsave(
+  "figures/tnaa_gender_strat_cmd3.pdf",
+  device = "pdf",
+  dpi = 300,
+  height = 5,
+  width = 8.5
+)
+
+
+```
+
+
+Need to compare groups separately again as some patients have multiple
+comorbidities
+
+```{r}
+risk_factors <- c("hypertension2", "diabetes2", "CAD2", "obesity2")
+# needs to be same length as above vector
+
+tnaa_plots_cmd3 <- map(risk_factors, function(x){
+  
+  
+  df_tnaa_cmd3 %>%
+    filter(!is.na( .data[[ x ]])) %>% 
+    #ggplot(aes(x = fct_relevel(group, "healthy", "At Risk"), y = Abundance, color=group)) + 
+    ggplot(aes(x = .data [[ x ]], y = Abundance, color= .data[[ x ]])) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.1), size=3.75, alpha=0.4) + 
+    theme_cowplot() + 
+    #scale_color_manual(values = cols)+
+    scale_color_aaas() +
+    ylab(paste0("EC 4.1.99.1 Tryptophanase", "\n", "Asin(sqrt(rel. abundance))")) +
+    xlab("") +
+    theme(axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+    stat_compare_means(comparisons = list(c("healthy", gsub("2","", x,))),
+                       method = "wilcox.test",
+                       label = "p.format")
+}
+)
+
+
+tnaa_plots_cmd3
+
+#imap(indole_producer_plots_cmd3, function(.x, .y) ggsave(paste0("figures/", .y, "_cmd3__dotplot.pdf"), .x, device = "pdf", dpi=300, height = 4.5, width = 8))
+```
+
+## Question 3. Are indole-producers/tryptophanase enzymes enriched in acute phase/associated with severity or outcome?
+
+Steps
+
+load phyloseq and convert to rel abund -\> then arcsin transform melt to
+df and select feature (E. coli and any Lactobacilli) Encode binary
+values as 0-1 and convert to factor
+
+Melt phyloseq and select important variables, ensure binary are all 0-1
+
+#### Patient characteristics
+
+```{r}
+# remove haemorrhagic stroke and TIA samples 
+ps_lledos <- ps_lledos %>% 
+  subset_samples(bleed != 1) %>% 
+  subset_samples(class != "TIA") 
+```
+
+
+```{r}
+meta_lledos <- meta_to_df(ps_lledos) %>% 
+  mutate(outcome = case_when(mRS_90d %in% 0:2 ~ "mRS 0-2",
+                             mRS_90d <= 2 ~ "mRS 0-2",
+                             mRS_90d %in% 3:6 ~ "mRS 3-6",
+                             mRS_90d > 2 ~ "mRS 3-6")) 
+
+cat_vars <- c("hypertension", "diabetes", "dyslipidemia", "atrial_fibrillation")
+meta_lledos <- meta_lledos %>% 
+  select(class, sex, age, hypertension, diabetes, dyslipidemia, atrial_fibrillation, obesity, outcome, nihss_in, nihss_24, TOAST, ) %>% 
+  mutate(sex = replace(sex, sex == '?', NA)) %>% 
+  # fix differences in TOAST 
+  mutate(TOAST = recode(TOAST, "LAA" = "Large artery atherosclerosis",
+                        "Large Artery Atherosclerosis" = "Large artery atherosclerosis",
+                        "Large arthery atherosclerosis" = "Large artery atherosclerosis",
+                        "Athero" = "Large artery atherosclerosis",
+                        "Cardiac" = "Cardioembolic",
+                        "Cardiac (AF)" = "Cardioembolic",
+                        "undertermined non-ESUS" = "Undetermined",
+                        "Unknown" = "Undetermined",
+                        "CE" = "Cardioembolic",
+                        "Cardioembolism" = "Cardioembolic",
+                        "Other ethiology" = "Other etiology")) %>% 
+  mutate_at(cat_vars, factor) 
+
+```
+
+```{r}
+table2 <-
+  tbl_summary(
+    meta_lledos,
+    missing = "no", 
+    by = "class",
+    label = list(sex = "Sex", age = "Age", hypertension = "Hypertension", diabetes = "Diabetes",dyslipidemia = "Dyslipidemia",atrial_fibrillation = "Atrial fibrillation", nihss_in = "NIHSS score admission", nihss_24 = "NIHSS 24h") # don't list missing data separately
+  ) %>%  
+  add_n() %>%  # add column with total number of non-missing observations
+  add_p() %>%  # test for a difference between groups
+  bold_labels()
+table2 %>%  
+  as_gt() %>%  
+  gt::gtsave(filename = "Baseline_characteristics.docx")
+```
+
+#### Differential abundance
+
+Class
+
+```{r}
+da_res <- ps_lledos %>% 
+  subset_samples(class %in% c("control", "stroke")) %>%
+  filter_ps(abun = 1e-6, prev=0.33) %>% 
+  transform("relative") %>%
+  transform("arcsin") %>%
+  maaslin2_tax(out="lledos_da_tax", fixed="class")
+da_res_df <- da_res$results
+da_res_df$Species <-  gsub(".*\\.(s__[^.]*).*", "\\1", da_res_df$feature)
+```
+
+```{r}
+da_res_df %>%
+  filter(qval < 0.05) %>% 
+  slice_max(abs(coef), n=40) %>% 
+  mutate(enriched_in = case_when(coef < 0 ~ "control", TRUE ~ "stroke")) %>%
+  arrange(coef) %>%
+  mutate(Species = factor(Species, levels=Species)) %>% 
+  ggplot(aes(x = Species, y = coef, color = enriched_in)) +
+  #scale_x_discrete(labels= da_res_df$Species) + 
+  geom_point(size = 5) +
+  labs(y = "Coefficient", x = "") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(color = "black", size = 14),
+    axis.text.y = element_text(color = "black", size = 14),
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.position = "none"
+  ) +
+  coord_flip() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  scale_color_manual(values = cols)
+ggsave("figures/DA_species_maaslin2_stroke_ctrl.pdf", device = "pdf", dpi=300, height = 7.25, width = 8)
+```
+
+### Bubble plot overview
+
+How does this compare to stroke risk factors? 
+
+Bubble plot control vs risk factors and stroke
+
+prep stroke data 
+
+Some of the disease groupings are not 1:1 between cmd3 and the stroke data, e.g.
+T2D and Diabetes (unclear if T1D, T2D or both). To avoid making any comparison
+which may not make sense, here we will only plot stroke samples, in a separate 
+category and not distinguish between those with or without comorbidities for the
+purpose of this plot. 
+
+```{r}
+df_indole_producers_stroke_split <- ps_lledos %>%
+  transform("relative") %>% 
+  transform("arcsin") %>% 
+  speedyseq::psmelt() %>% 
+  mutate(Species =  gsub("s__", "", Species)) %>% 
+  mutate(Species = gsub("_", " ", Species)) %>% 
+  filter(grepl(paste(indole_species2, collapse = "|"), Species)) %>% 
+  filter(class == "stroke") %>%
+  mutate(OTU = gsub("species:", "", OTU)) %>% 
+  mutate(age_group = case_when(age < 65 & age >= 45 ~ "middle-aged",
+                               age < 45 ~ "young",
+                               age >= 65 ~ "elderly",
+                               TRUE ~ NA)) %>% 
+  mutate(disease = "stroke") %>% 
+  mutate(OTU = Species)
+
+  
+```
+
+rename gender column to sex so its the same as stroke dataset
+```{r}
+df_indole_producers_cmd3_split <- df_indole_producers_cmd3_split %>%
+  rename(sex=gender)
+```
+```{r}
+common_cols <- intersect(colnames(df_indole_producers_cmd3_split), colnames(df_indole_producers_stroke_split))
+df_indole_producers_stroke_split <- df_indole_producers_stroke_split %>%
+  select(all_of(common_cols))
+df_indole_producers_cmd3_split <- df_indole_producers_cmd3_split %>%
+  select(all_of(common_cols)) %>% 
+  mutate(smoker = case_when(smoker == "yes" ~ 1,
+                            smoker == "no" ~ 0, 
+                            TRUE ~ NA)) %>% 
+  mutate(sex = recode(sex, "male" = "M", "female" = "F"))
+```
+
+Find which species are present in cmd3 but not stroke and add dummy 0 values for
+stroke dataset. 
+
+```{r}
+missing_species <- setdiff(list_int_taxa_cmd3, unique(df_indole_producers_stroke_split$Species))
+df_indole_producers_stroke_split
+```
+
+```{r}
+# Get taxonomic info for missing species, taking first occurrence of each
+missing_species_info <- df_indole_producers_cmd3_split %>%
+  filter(Species %in% missing_species) %>%
+  group_by(Species) %>%
+  slice_head(n = 1) %>%  # Take first occurrence of each species
+  ungroup() %>%
+  select(Species, Kingdom, Phylum, Class, Order, Family, Genus, OTU)
+
+# Get sample metadata from df
+sample_metadata <- df_indole_producers_stroke_split %>%
+  select(Sample, disease, age, country, smoker, hypertension, sex,
+         diabetes, obesity, age_group) %>%
+  distinct()
+
+# Create missing data
+missing_data <- sample_metadata %>%
+  crossing(missing_species_info) %>%
+  mutate(Abundance = 0)
+
+df_indole_producers_stroke_split <- bind_rows(df_indole_producers_stroke_split, missing_data)
+```
+
+
+```{r}
+disease_cols_stroke <- c("healthy" = "#424143", "age (>65)" = "#B38D97", "CAD" = "#EDEBD7", "hypertension" = "#9CC4B2", "obesity" = "#F9AFAF", "T2D" = "#F9D5A7", "stroke" = "#F7921E")
+
+df_indole_producers_cmd3_stroke_split <- df_indole_producers_cmd3_split %>%
+  bind_rows(df_indole_producers_stroke_split)
+
+# calc prevalence here too 
+mean_abundance_data <- df_indole_producers_cmd3_stroke_split %>% 
+  filter(OTU %in% list_int_taxa_cmd3) %>% 
+  filter(disease %in% c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke"))%>%
+  filter(!is.na(Species), !is.na(Abundance)) %>%
+  group_by(Species, disease) %>%
+  summarise(
+    mean_abundance = mean(Abundance, na.rm = TRUE),
+    n_samples = n(),
+     prevalence = sum(Abundance > 0, na.rm = TRUE) / n(),
+    .groups = 'drop'
+  )
+
+species_order <- mean_abundance_data %>%
+  group_by(Species) %>%
+  summarise(overall_mean = mean(mean_abundance, na.rm = TRUE), .groups = 'drop') %>%
+  arrange(overall_mean) %>%
+  pull(Species)
+
+# Step 2: Set factor levels for proper ordering
+mean_abundance_data <- mean_abundance_data %>%
+  mutate(
+    disease = factor(disease, 
+                    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")),
+    Species = factor(Species, levels = species_order)
+  ) 
+```
+
+```{r}
+species_rem <- mean_abundance_data %>% 
+  group_by(Species, disease) %>% 
+  summarise(mean_prev = mean(prevalence)) %>% 
+  filter(mean_prev < 0.33) %>% 
+  distinct(Species) %>% 
+  pull(Species)
+
+```
+
+
+```{r}
+comps_dis_stroke <- make_pairwise_comparisons(df_indole_producers_cmd3_stroke_split, "disease")
+comps_dis_stroke <- comps_dis_stroke[grepl("healthy", comps_dis_stroke)]
+# order alphabetically
+comps_dis_stroke <- comps_dis_stroke[order(sapply(comps_dis_stroke, function(x) x[1]))]
+
+stats_all_cmd3_stroke <- df_indole_producers_cmd3_stroke_split %>%
+  filter(OTU %in% list_int_taxa_cmd3) %>% 
+  # no sample has abundance > 0
+  filter(!OTU %in% species_rem) %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")
+  )) %>%
+  group_by(OTU) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis_stroke,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance()
+
+stats_all_cmd3_stroke_bubble <- stats_all_cmd3_stroke %>% 
+  mutate(
+    Species = OTU,
+    disease = ifelse(group1 == "healthy", group2, group1),
+    p.adj.signi = ifelse(p.adj.signif == "ns", "", p.adj.signif)
+  ) %>%
+  select(Species, disease, p.adj.signi) %>%
+  # Add reference (healthy) with no stars
+  add_row(Species = unique(.$Species), disease = "healthy", p.adj.signi = "") %>% 
+  mutate(Species = factor(Species, levels = species_order)) %>%
+  arrange(Species, disease)
+# order according to mean abundance data
+
+mean_abundance_data %>%
+  # no sample has abundance > 0
+  filter(!Species %in% species_rem) %>% 
+  ggplot(aes(x = disease, y = Species)) +
+  geom_point(aes(size = mean_abundance, color = disease), 
+             alpha = 0.8) +
+  # Custom color palette
+  scale_color_manual(values = disease_cols_stroke) +
+  
+  # Scale for bubble size
+  scale_size_continuous(
+    name = "Mean\nAbundance",
+    range = c(2, 20),
+    guide = guide_legend(override.aes = list(color = "black"))
+  ) +
+  
+  # Theme
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 11, face = "italic"),
+    axis.title = element_blank(),
+    legend.title = element_text(size = 12),
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5)
+   # aspect.ratio = 3/4
+  ) +
+geom_text(data = stats_all_cmd3_stroke_bubble,
+          aes(x = disease, y = Species, label = ifelse(p.adj.signi != "", "*", "")),
+          size = 6,
+          color = "black",
+          vjust = 0.5,
+          inherit.aes = FALSE) +
+  coord_fixed(ratio = 1.025)
+ggsave("figures/indole_producing_taxa_stroke.pdf", device = "pdf", dpi=300, height = 6.5, width = 9)
+```
+
+```{r}
+stats_e_coli_cmd3_stroke <- df_indole_producers_cmd3_stroke_split %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")
+  )) %>%
+  drop_na(sex) %>%
+  filter(OTU == "Escherichia coli") %>%
+  group_by(sex) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis_stroke,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance() %>%
+  add_xy_position(x = "disease")
+
+df_indole_producers_cmd3_stroke_split %>%
+  filter(OTU == "Escherichia coli") %>%
+  drop_na(sex) %>%
+  ggplot(aes(
+    x = fct_relevel(
+      disease,
+      "healthy",
+      "age (>65)",
+      "CAD",
+      "hypertension",
+      "obesity",
+      "T2D",
+      "stroke"
+    ),
+    y = Abundance,
+    color = disease
+  )) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.15),
+    size = 3.75,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  #scale_color_manual(values = cols)+
+  scale_color_manual(values = disease_cols_stroke ) +
+  ylab("Escherichia coli \n Asin(sqrt(rel. abundance))") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black"),
+  ) +
+  scale_y_continuous(limits = c(-0.1, 1.25), breaks = seq(0, 1, 0.2)) +
+  facet_wrap( ~ sex) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  stat_pvalue_manual(
+    stats_e_coli_cmd3_stroke,
+    label = "p.adj",
+    hide.ns = T,
+    inherit.aes = FALSE,
+    bracket.nudge.y = -0.2,
+    step.increase = 0.0015
+  ) +
+  EnvStats::stat_n_text() + 
+  rotate_x_text(angle=45)
+ggsave(
+  "figures/e_coli_gender_strat_cmd3_stroke.pdf",
+  device = "pdf",
+  dpi = 300,
+  height = 5,
+  width = 8.5
+)
+
+
+```
+
+
+#### tnaA bubble plot 
+
+
+This part is not really relevant but need to generate df_tnaa_stroke_split so it has the same/similar format
+```{r}
+df_tnaa_stroke_split <- lledos_func %>%
+  transform_func("relative") %>% 
+  transform_func("arcsin") %>% 
+  subset_samples_func(class == "stroke" & class != "TIA" & bleed != 1) %>%
+  pluck("EC") %>% 
+  rownames_to_column("EC") %>%
+  filter(grepl("EC:4.1.99.1_", EC)) %>% 
+  pivot_longer(-EC, names_to = "Sample", values_to = "Abundance") %>% 
+  merge(filter(meta_lledos %>% rownames_to_column("Sample"), class=="stroke"), by="Sample") %>% 
+  mutate(age_group = case_when(age < 65 & age >= 45 ~ "middle-aged",
+                               age < 45 ~ "young",
+                               age >= 65 ~ "elderly",
+                               TRUE ~ NA)) %>% 
+  mutate(disease = "stroke") 
+```
+
+Need to repeat this for tnaA dfs (df_tnaa_cmd3_split + find or create df_tnaa_stroke_split)
+
+```{r}
+df_tnaa_cmd3_split <- df_tnaa_cmd3_split %>% 
+  rename(sex = gender) %>% 
+  mutate(sex = recode(sex, "male" = "M", "female" = "F"))
+```
+
+```{r}
+common_cols <- intersect(colnames(df_tnaa_cmd3_split), colnames(df_tnaa_stroke_split))
+df_tnaa_stroke_split <- df_tnaa_stroke_split %>%
+  select(all_of(common_cols))
+df_tnaa_cmd3_split <- df_tnaa_cmd3_split %>%
+  select(all_of(common_cols)) 
+
+# make sure column types are the same 
+
+df_tnaa_stroke_split <- df_tnaa_stroke_split %>%
+  mutate(
+    hypertension = as.numeric(as.character(hypertension)),
+    diabetes = as.numeric(as.character(diabetes)),
+    obesity = as.integer(obesity)
+  )
+```
+
+Combine dataframes and calculate mean abundance across disease 
+```{r}
+df_tnaa_cmd3_stroke_split <- df_tnaa_cmd3_split %>%
+  bind_rows(df_tnaa_stroke_split)
+
+mean_abundance_data_tnaa <- df_tnaa_cmd3_stroke_split %>% 
+  filter(disease %in% c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke"))%>%
+  group_by(disease) %>%
+  summarise(
+    mean_abundance = mean(Abundance, na.rm = TRUE),
+    n_samples = n(),
+    .groups = 'drop'
+  )
+
+
+
+# Step 2: Set factor levels for proper ordering
+mean_abundance_data_tnaa <- mean_abundance_data_tnaa %>%
+  mutate(
+    disease = factor(disease, 
+                    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")),
+  ) 
+```
+
+This performs stats and plotting 
+
+Many minor things need edited here
+
+```{r}
+stats_all_cmd3_stroke_tnaa <- df_tnaa_cmd3_stroke_split %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")
+  )) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis_stroke,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance()
+
+stats_all_cmd3_stroke_bubble_tnaa <- stats_all_cmd3_stroke_tnaa %>% 
+  mutate(
+    disease = ifelse(group1 == "healthy", group2, group1),
+    p.adj.signif = ifelse(p.adj.signif == "ns", "", p.adj.signif)
+  ) %>%
+  mutate(EC = "tnaA (EC 4.1.99.1)") %>%
+  select(EC, disease, p.adj.signif) %>%
+  # Add reference (healthy) with no stars
+  add_row(EC = unique(.$EC), disease = "healthy", p.adj.signif = "") 
+  
+  # %>% 
+  # mutate(EC = factor(EC, levels = species_order)) %>%
+  # arrange(EC, disease)
+# order according to mean abundance data
+
+mean_abundance_data_tnaa %>%
+  mutate(EC = "tnaA (EC 4.1.99.1)") %>% 
+  # no sample has abundance > 0
+  ggplot(aes(x = disease, y = EC)) +
+  geom_point(aes(size = mean_abundance, color = disease), 
+             alpha = 0.8) +
+  # Custom color palette
+  scale_color_manual(values = disease_cols_stroke) +
+  
+  # Scale for bubble size
+  scale_size_continuous(
+    name = "Mean\nAbundance",
+    range = c(2, 20),
+    guide = guide_legend(override.aes = list(color = "black"))
+  ) +
+  
+  # Theme
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 11, face = "italic"),
+    axis.title = element_blank(),
+    legend.title = element_text(size = 12),
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5)
+   # aspect.ratio = 3/4
+  ) +
+geom_text(data = stats_all_cmd3_stroke_bubble_tnaa,
+          aes(x = disease, y = EC, label = ifelse(p.adj.signif != "", "*", "")),
+          size = 6,
+          color = "black",
+          vjust = 0.5,
+          inherit.aes = FALSE) +
+  coord_fixed(ratio = 1.025)
+ggsave("figures/tnaA_riskfactors_stroke.pdf", device = "pdf", dpi=300, height = 4, width = 9)
+```
+
+
+```{r}
+stats_tnaa_cmd3_stroke <- df_tnaa_cmd3_stroke_split %>%
+  mutate(disease = factor(
+    disease,
+    levels = c("healthy", "age (>65)", "CAD", "hypertension", "obesity", "T2D", "stroke")
+  )) %>%
+  drop_na(sex) %>%
+  group_by(sex) %>%
+  pairwise_wilcox_test(
+    Abundance ~ disease,
+    comparisons = comps_dis_stroke,
+    p.adjust.method = "BH",
+    paired = F
+  ) %>%
+  add_significance() %>%
+  add_xy_position(x = "disease")
+
+df_tnaa_cmd3_stroke_split %>%
+  drop_na(sex) %>%
+  ggplot(aes(
+    x = fct_relevel(
+      disease,
+      "healthy",
+      "age (>65)",
+      "CAD",
+      "hypertension",
+      "obesity",
+      "T2D",
+      "stroke"
+    ),
+    y = Abundance,
+    color = disease
+  )) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.15),
+    size = 3.75,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  #scale_color_manual(values = cols)+
+  scale_color_manual(values = disease_cols_stroke ) +
+  ylab("tnaA \n Asin(sqrt(rel. abundance))") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black"),
+  ) +
+  #scale_y_continuous(limits = c(-0.00275, 0.04), breaks = seq(0, 0.04, 0.005)) + 
+  facet_wrap( ~ sex) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  stat_pvalue_manual(
+    stats_tnaa_cmd3_stroke,
+    label = "p.adj",
+    hide.ns = T,
+    inherit.aes = FALSE,
+    step.increase = 0.0015
+  ) +
+  EnvStats::stat_n_text() + 
+  rotate_x_text(angle=45)
+ggsave(
+  "figures/tnaa_gender_strat_cmd3_stroke.pdf",
+  device = "pdf",
+  dpi = 300,
+  height = 5,
+  width = 8.5
+)
+
+
+```
+
+Severity
+
+```{r}
+da_res_sev_mild_sev <- ps_lledos %>% 
+  ps_mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+                                              nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+                                              nihss_in >= 15 ~ "severe (NIHSS >15)")) %>%
+  subset_samples(severity %in% c("mild (NIHSS <5)" , "severe (NIHSS >15)")) %>%
+  filter_ps(abun = 1e-6, prev=0.33) %>% 
+  transform("relative") %>%
+  transform("arcsin") %>%
+  maaslin2_tax(out="lledos_da_tax_sev_mild_sev", fixed="severity")
+da_res_sev_mild_sev_df <- da_res_sev_mild_sev$results
+```
+
+```{r}
+da_res_sev_mod_sev <- ps_lledos %>% 
+  ps_mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+                                              nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+                                              nihss_in >= 15 ~ "severe (NIHSS >15)")) %>%
+  subset_samples(severity %in% c("mild (NIHSS <5)","moderate (NIHSS >5 <15)" , "severe (NIHSS >15)")) %>%
+  filter_ps(abun = 1e-6, prev=0.33) %>% 
+  transform("relative") %>%
+  transform("arcsin") %>%
+  maaslin2_tax(out="lledos_da_tax_sev", fixed="severity", reference="severity,mild (NIHSS <5)")
+da_res_sev_df <- da_res_sev$results
+```
+
+Outcome
+
+Make sure this mutate also doesn't add 0 to missing samples
+
+```{r}
+da_res_outcome <- ps_lledos %>% 
+  ps_mutate(outcome = case_when(mRS_90d == "" ~ NA, 
+                                mRS_90d %in% 0:2 ~ "Favourable",
+                             mRS_90d <= 2 ~ "Favourable",
+                             mRS_90d %in% 3:6 ~ "Poor",
+                             mRS_90d > 2 ~ "Poor")) %>%
+  subset_samples(outcome %in% c("Poor", "Favourable")) %>%
+  subset_samples(class == "stroke") %>%
+  filter_ps(abun = 1e-6, prev=0.33) %>% 
+  transform("relative") %>%
+  transform("arcsin") %>%
+  maaslin2_tax(out="lledos_da_tax_outcome", fixed="outcome")
+da_res_outcome_df <- da_res_outcome$results
+da_res_outcome_df$Species <-  gsub(".*\\.(s__[^.]*).*", "\\1", da_res_outcome_df$feature)
+```
+
+```{r}
+outcome_cols <- c("Favourable"= "dodgerblue", "Poor" = "firebrick1")
+da_res_outcome_df %>%
+  filter(qval < 0.05) %>% 
+  mutate(enriched_in = case_when(coef < 0 ~ "Favourable", TRUE ~ "Poor")) %>%
+  arrange(coef) %>%
+  mutate(Species = factor(Species, levels=Species)) %>% 
+  ggplot(aes(x = Species, y = coef, color = enriched_in)) +
+  #scale_x_discrete(labels= da_res_df$Species) + 
+  geom_point(size = 5) +
+  labs(y = "Coefficient", x = "") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(color = "black", size = 14),
+    axis.text.y = element_text(color = "black", size = 14),
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.position = "none"
+  ) +
+  coord_flip() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  scale_color_manual(values = outcome_cols)
+ggsave("figures/DA_species_maaslin2_outcome.pdf", device = "pdf", dpi=300, height = 4.25, width = 6.5)
+```
+
+
+### Indole producers
+
+```{r}
+#save(species_outcome, file = "../data/species_outcome.RData")
+#load("../data/species_outcome.RData")
+conflicted::conflicts_prefer(base::as.factor)
+species_outcome <- ps_lledos %>%
+  speedyseq::psmelt() %>% 
+  filter(class == "stroke") %>% 
+  # remove samples missing from tnaA analysis
+  filter(! Sample %in% c("s137", "s177")) %>% 
+  mutate(infection_any = case_when(respiratory_infection == 1 ~ 1,
+                                   other_infection == 1 ~ 1,
+                                   TRUE ~ 0)) %>%
+  mutate(outcome = case_when(mRS_90d == "" ~ NA_real_,
+                             mRS_90d %in% 0:2 ~ 0,
+                             mRS_90d <= 2 ~ 0,
+                             mRS_90d %in% 3:6 ~ 1,
+                             mRS_90d > 2 ~ 1,
+                             TRUE ~ NA)) %>% 
+  mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+                                              nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+                                              nihss_in >= 15 ~ "severe (NIHSS >15)")) %>% 
+  select(Species, Sample, Abundance, age, sex, hypertension, diabetes, nihss_in, severity, dyslipidemia, infection_any, outcome) %>% 
+  drop_na() %>% 
+  mutate(across(c(sex, hypertension, diabetes, dyslipidemia, infection_any, outcome), as.factor))
+```
+
+```{r}
+e_coli_outcome <- species_outcome %>% 
+  filter(Species == "s__Escherichia_coli") %>% 
+  rename(s__Escherichia_coli=Abundance)
+
+a_muciniphila_outcome <- species_outcome %>% 
+  filter(Species == "s__Akkermansia_muciniphila") %>% 
+  rename(s__Akkermansia_muciniphila=Abundance)
+
+e_eligens_outcome <- species_outcome %>% 
+  filter(Species == "s__Eubacterium_hallii") %>% 
+  rename(s__Eubacterium_hallii=Abundance)
+
+  
+```
+
+```{r}
+# Variables to test
+variables <- c("s__Escherichia_coli", "age", "sex", "hypertension", "diabetes", 
+               "nihss_in", "dyslipidemia", "infection_any")
+
+# Run univariate logistic regression
+e_coli_univariate <- lapply(variables, function(var) {
+  formula <- as.formula(paste("outcome ~", var))
+  glm(formula, data = e_coli_outcome, family = binomial)
+})
+
+# e_coli_univariate <- e_coli_outcome %>%
+#   select(all_of(variables), outcome) %>% 
+#   tbl_uvregression(                         ## produce univariate table
+#     method = glm,                           ## define regression want to run (generalised linear model)
+#     y = outcome,                            ## define outcome variable
+#     method.args = list(family = binomial),  ## define what type of glm want to run (logistic)
+#     exponentiate = TRUE                     ## exponentiate to produce odds ratios (rather than log odds)
+# )
+
+e_coli_univariate_summary <- lapply(e_coli_univariate, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+
+# Combine results into a single dataframe
+e_coli_univariate_df <- do.call(rbind, e_coli_univariate_summary)
+
+```
+
+Akkermansia muciniphila
+
+
+```{r}
+# Variables to test
+variables <- c("s__Akkermansia_muciniphila", "age", "sex", "hypertension", "diabetes", 
+               "nihss_in", "dyslipidemia", "infection_any")
+
+# Run univariate logistic regression
+a_muci_univariate <- lapply(variables, function(var) {
+  formula <- as.formula(paste("outcome ~", var))
+  glm(formula, data = a_muciniphila_outcome, family = binomial)
+})
+
+a_muci_univariate_summary <- lapply(a_muci_univariate, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+
+# Combine results into a single dataframe
+a_muci_univariate_df <- do.call(rbind, a_muci_univariate_summary)
+
+```
+
+Akkermansia not significant but similar estimate
+
+### Other indoles
+```{r}
+other_indole_producers <- c("s__Bifidobacterium_longum", "s__Bifidobacterium_bifidum","s__Bifidobacterium_adolescentis","s__Clostridium_sporogenes","s__Clostridium_perfringens", "s__Lactobacillus_reuteri", "s__Lactobacillus_acidophilus", "s__Lactobacillus_plantarum", "s__Bacteroides_fragilis", "s__Bacteroides_thetaiotaomicron", "s__Enterococcus_faecalis")
+other_indole_producers_det <- other_indole_producers[other_indole_producers %in% species_outcome$Species]
+
+```
+
+Lactobacillus reuteri
+
+```{r}
+other_indole_producers_outcome <- map(other_indole_producers_det, function(species) {
+  outcome_data <- species_outcome %>% 
+    filter(Species == species) 
+  model <- glm(outcome ~ Abundance, data = outcome_data, family = binomial)
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+names(other_indole_producers_outcome) <- other_indole_producers_det
+```
+
+```{r}
+other_indole_producers_outcome_df <- imap(other_indole_producers_outcome, \(x, y) {
+  x %>%
+    filter(term != "(Intercept)") %>%
+    mutate(Species = y)
+}) %>%
+  bind_rows() %>% 
+  relocate(Species) %>% 
+  adjust_pvalue(method = "BH", p.col = "p.value", output.col = "qval") %>%
+  select(Species, estimate, conf.low, conf.high, p.value, qval) %>% 
+  mutate(
+    across(starts_with("estimate"), ~round(.x, 2)),
+    across(starts_with("conf"), ~round(.x, 2)),
+    across(starts_with("qval"), ~round(.x, 2)),
+    across(starts_with("p.value"), ~case_when(
+      .x < 0.001 ~ "< 0.001",
+      TRUE ~ as.character(round(.x, 3))
+    ))
+  ) %>% 
+    mutate(Species = gsub("s__", " ", Species)) %>% 
+    mutate(Species= gsub("_", " ", Species))
+```
+
+```{r}
+other_indole_producers_outcome_df %>% 
+  unite("95% CI", conf.low, conf.high, sep = ", ") %>%
+  rename(
+    "p-value" = p.value,
+    "q-value" = qval
+  ) %>%
+gt() %>%
+   tab_style(
+    style = list(
+      cell_text(style = "italic")
+      ),
+    locations = cells_body(
+      columns = Species
+    )
+  ) %>% 
+  gt::gtsave(filename = "univariate_log_regression_other_indole_producers.docx")
+```
+
+E hallii and F. prausnitzii negatively associated with outcome
+
+```{r}
+# e_eligens_univariate <- glm(outcome ~ s__Eubacterium_hallii, data=e_eligens_outcome, family = binomial)
+# tidy(e_eligens_univariate, conf.int = T, exponentiate = T)
+```
+
+Plot -
+
+Remove y-axis line and title reading on best way to present this tidy up
+names tidy up significance
+
+to calculate odds ratios: exp(coef(model))
+
+```{r}
+# Extract clean variable names
+e_coli_univariate_df <- e_coli_univariate_df %>%
+    filter(term != "(Intercept)") %>% 
+  mutate(clean_term = gsub("[0-9]+|[MF]$|TRUE|FALSE", "", term))  # Remove levels, M/F, TRUE/FALSE
+
+# Further customization for specific variables if needed
+clean_mapping <- c("s__Escherichia_coli" = "E. coli","sex" = "Sex", "age" = "Age", "hypertension" = "Hypertension", 
+                   "diabetes" = "Diabetes", "nihss_in" = "NIHSS Score Admission", 
+                   "dyslipidemia" = "Dyslipidemia", "infection_any" = "Infection (Any)")
+
+e_coli_univariate_df <- e_coli_univariate_df %>%
+  mutate(clean_term = recode(clean_term, !!!clean_mapping))
+```
+
+```{r}
+e_coli_univariate_df %>% 
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ paste0(round(estimate, digits = 2), " ***"),
+      p.value < 0.01 ~  paste0(round(estimate, digits = 2), " **"),
+      p.value < 0.05 ~  paste0(round(estimate, digits = 2), " *"),
+      TRUE ~ paste0(round(estimate, digits = 2), " "),
+    ),
+    term = factor(term, levels = term)  # Maintain the order of variables
+  ) %>% 
+  ggplot(aes(x = clean_term, y = estimate)) +
+  geom_point(size = 3, shape=15, aes(color=estimate > 1)) +  # Points for odds ratios
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15) +
+  geom_text(aes(label = significance), nudge_x = 0.4, hjust=0.5, size = 4, color = "black") +# Error bars
+  scale_y_log10() +  # Log scale for odds ratios
+  coord_flip() +  # Flip coordinates for better readability
+  labs(
+    title = "Univariate regression (n = 148)",
+    x ="",
+    y = "Odds Ratio (log scale)"
+  ) +
+  theme_cowplot() + 
+  scale_color_manual(values=c("dodgerblue", "firebrick1")) +
+  theme(axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    axis.text.y = element_text(
+    face = c(rep("plain", 3), "italic", rep("plain", 4))),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.position = "None") + 
+  geom_hline(yintercept = 1, linetype="dashed",color="lightgrey")
+ggsave("figures/e_coli_univariate.pdf", device = "pdf", dpi=300, height = 5, width = 6)
+```
+
+Plot model
+
+```{r}
+multivariate_model <- glm(outcome ~ s__Escherichia_coli + age + sex + hypertension + diabetes + 
+             nihss_in + dyslipidemia  + infection_any, 
+             data = e_coli_outcome, family = binomial)
+multivariate_model %>% 
+  tbl_regression(exponentiate = T, label = as.list(clean_mapping), show_single_row = c("sex", "hypertension", "diabetes", "dyslipidemia", "infection_any")) %>%
+  bold_p(t = 0.05) %>% 
+  as_gt() %>% 
+  gt::gtsave(filename = "multivariate_log_regression_e_coli.docx")
+```
+
+##### Group comparisons
+
+```{r}
+e_coli_stroke <- ps_lledos %>% 
+  transform("relative") %>%
+  transform("arcsin") %>%
+  speedyseq::psmelt() %>% 
+  filter(class %in% c("control", "stroke")) %>% 
+  filter(Species == "s__Escherichia_coli")
+```
+
+```{r}
+e_coli_stroke %>% 
+  ggplot(aes(x = class, y = Abundance, color=class)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  scale_color_manual(values = cols) + 
+  theme_cowplot() + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("control", "stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2.5)
+ggsave("figures/e_coli_class.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+Male stroke patients vs male controls
+
+```{r}
+e_coli_stroke %>% 
+  filter(sex == "M") %>% 
+  ggplot(aes(x = class, y = Abundance, color=class)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  scale_color_manual(values = cols) + 
+  theme_cowplot() + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("control", "stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2.5)
+ggsave("figures/e_coli_class_male_only.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+Elderly patients 
+
+```{r}
+e_coli_stroke %>% 
+  filter(age > 65) %>% 
+  ggplot(aes(x = class, y = Abundance, color=class)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  scale_color_manual(values = cols) + 
+  theme_cowplot() + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("control", "stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2.5)
+ggsave("figures/e_coli_class_elderly_only.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+
+Stroke severity and outcome
+
+NIHSS score
+
+```{r}
+severity_pal <- c("#F7B267", "#CC3F0C", "#6F3A34")
+names(severity_pal) <- c("mild (NIHSS <5)","moderate (NIHSS >5 <15)","severe (NIHSS >15)")
+e_coli_sev_plot <- e_coli_stroke %>% 
+  mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+                                              nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+                                              nihss_in >= 15 ~ "severe (NIHSS >15)")) %>% 
+  mutate(outcome = case_when(mRS_90d == "" ~ NA_real_,
+                             mRS_90d %in% 0:2 ~ 0,
+                             mRS_90d <= 2 ~ 0,
+                             mRS_90d %in% 3:6 ~ 1,
+                             mRS_90d > 2 ~ 1,
+                             TRUE ~ NA)) %>% 
+  filter(class == "stroke")
+
+severity_comps <- make_pairwise_comparisons(e_coli_sev_plot %>% 
+  filter(!is.na(severity)), variable = "severity")
+
+e_coli_sev_plot %>% 
+  filter(!is.na(severity)) %>% 
+  ggplot(aes(x =severity, class, y =Abundance, color=severity)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values = severity_pal) + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  EnvStats::stat_n_text() +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  stat_compare_means(comparisons = severity_comps,
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2)
+#ggsave("figures/e_coli_severity.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+```
+
+```{r}
+e_coli_sev_plot %>% 
+  filter(!is.na(severity)) %>% 
+  filter(sex == "M") %>% 
+  ggplot(aes(x =severity, class, y = Abundance, color=severity)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values=severity_pal) + 
+ ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  stat_compare_means(comparisons = severity_comps,
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2)
+ggsave("figures/e_coli_severity_male_only.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+```
+
+```{r}
+e_coli_sev_plot %>% 
+  filter(!is.na(severity)) %>% 
+  filter(age > 65) %>% 
+  ggplot(aes(x =severity, class, y = Abundance, color=severity)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values=severity_pal) + 
+ ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  stat_compare_means(comparisons = severity_comps,
+                     method = "wilcox.test",
+                     label = "p.format") +
+  coord_fixed(ratio = 2)
+ggsave("figures/e_coli_severity_elderly_only.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+```
+
+Outcome
+
+```{r}
+outcome_pal <- c("Favourable"="#104547", "Poor"="#D5573B")
+
+
+e_coli_sev_plot %>% 
+  filter(!is.na(outcome)) %>%
+  mutate(outcome =  case_when(outcome == 0 ~ "Favourable",
+                             outcome == 1 ~ "Poor")) %>%
+  ggplot(aes(x = outcome, class, y = Abundance, color=outcome)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values = outcome_pal) + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  stat_compare_means(comparisons = list(c("Favourable", "Poor")),
+                     method = "wilcox.test",
+                     label = "p.format") +
+  EnvStats::stat_n_text() + 
+  coord_fixed(ratio = 2.5)
+ggsave("figures/e_coli_outcome.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+```{r}
+e_coli_sev_plot %>%
+  filter(!is.na(outcome)) %>%
+  mutate(outcome =  case_when(outcome == 0 ~ "Favourable",
+                             outcome == 1 ~ "Poor")) %>%
+  ggplot(aes(x = outcome, class, y = Abundance, color=outcome)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +
+  theme_cowplot() + 
+  scale_color_manual(values = outcome_pal) + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black")) +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  facet_wrap(~sex) +
+  stat_compare_means(comparisons = list(c("Favourable", "Poor")),
+                     method = "wilcox.test",
+                     label = "p.format") + 
+  coord_fixed(ratio = 2.5) + 
+  EnvStats::stat_n_text()
+ggsave("figures/e_coli_outcome_sex_strat_only.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+```{r}
+e_coli_sev_plot %>%
+  filter(!is.na(outcome)) %>%
+  filter(age > 65) %>% 
+  mutate(outcome =  case_when(outcome == 0 ~ "Favourable",
+                             outcome == 1 ~ "Poor")) %>%
+  ggplot(aes(x = outcome, class, y = Abundance, color=outcome)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +
+  theme_cowplot() + 
+  scale_color_manual(values = outcome_pal) + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  stat_compare_means(comparisons = list(c("Favourable", "Poor")),
+                     method = "wilcox.test",
+                     label = "p.format") + 
+  EnvStats::stat_n_text() + 
+  coord_fixed(ratio = 2.5)
+ggsave("figures/e_coli_outcome_elderly_only.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+### Tryptophanase
+
+Load data
+
+```{r}
+# meta_path <-"../../../Metagenomics/lledos/data/Lledos_metadata.tab"
+# 
+# humann_genes <- read_tsv("../../../Metagenomics/lledos/data/humann/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv")
+# humann_py <- read_tsv("../../../Metagenomics/lledos/data/humann/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv")
+# 
+# current_samples_genes <- humann_genes %>% 
+#   select(-`# Gene Family`) %>% 
+#   colnames() 
+# 
+# current_samples_py <- humann_py %>% 
+#   select(-`# Pathway`) %>% 
+#   colnames() 
+# 
+# current_samples_genes <- gsub("_merged_clean_Abundance-RPKs", "", current_samples_genes)
+# current_samples_py <- gsub("_merged_clean_Abundance*", "", current_samples_py)
+# 
+# 
+# current_samples <- intersect(current_samples_genes, current_samples_py)
+# meta_lledos <- read_tsv(meta_path)
+# meta_subset <- meta_lledos %>% filter(sample_id %in% current_samples)
+# write.table(meta_subset, file = "../../../Metagenomics/lledos/data/Lledos_metadata_subset.tab", sep = "\t", row.names = F, quote = F)
+```
+
+```{r}
+# meta_subset_path <-  "../../../Metagenomics/lledos/data/Lledos_metadata_subset.tab"
+# ec_path <- "../../../Metagenomics/lledos/data/humann/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv  "
+# ko_path <- "../../../Metagenomics/lledos/data/humann/merged_table/unstrat/humann_genefamilies_ko_unstratified.tsv"
+# py_path <- "../../../Metagenomics/lledos/data/humann/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv"
+# lledos_func <- import_func_profile(ec = ec_path,ko =  ko_path, py = py_path, meta = meta_subset_path, read=T)
+# save(lledos_func, file="../data/lledos_func.RData")
+#load("../data/lledos_func.RData")
+```
+
+##### Differential abundance
+
+```{r}
+load("../data/lledos_func.RData")
+# lledos_func_filt <- filter_func(lledos_func, prev = 0.33, abund = 1e-8, renorm = T) %>%
+#   transform_func("relative") %>% 
+#   transform_func("arcsin")
+
+# # lledos_func_filt_py <- filter_func(lledos_func, prev = 0.05, abund = 1e-8, renorm = T) %>%
+# #   transform_func("relative") %>% 
+# #   transform_func("arcsin")
+
+# # remove TIA and also create stroke only 
+# lledos_func_filt <- subset_samples_func(lledos_func_filt, class %in% c('control', 'stroke'))
+# # also add to metadata outcome and severity column
+# lledos_func_filt_stroke <-  subset_samples_func(lledos_func_filt, class == 'stroke')
+  
+# lledos_func_filt_stroke$Metadata <- lledos_func_filt_stroke$Metadata %>% 
+#   mutate(outcome = case_when(mRS_90d == "" ~ NA,
+#                              mRS_90d %in% 0:2 ~ "Favourable",
+#                              mRS_90d <= 2 ~ "Favourable",
+#                              mRS_90d %in% 3:6 ~ "Poor",
+#                              mRS_90d > 2 ~ "Poor")) %>% 
+#   mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+#                                               nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+#                                               nihss_in >= 15 ~ "severe (NIHSS >15)"))
+
+
+
+# # also add to metadata outcome and severity column
+# # lledos_func_filt_stroke_py <-  subset_samples_func(lledos_func_filt_py, "class == 'stroke'")
+  
+# # lledos_func_filt_stroke_py$Metadata <- lledos_func_filt_stroke_py$Metadata %>% 
+# #   mutate(outcome = case_when(mRS_90d %in% 0:2 ~ "Favourable",
+# #                              mRS_90d <= 2 ~ "Favourable",
+# #                              mRS_90d %in% 3:6 ~ "Poor",
+# #                              mRS_90d > 2 ~ "Poor")) %>% 
+# #   mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+# #                                               nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+# #                                               nihss_in >= 15 ~ "severe (NIHSS >15)"))
+
+# severitys <- c("mild (NIHSS <5)","moderate (NIHSS >5 <15)","severe (NIHSS >15)")
+# outcomes <- c("Favourable", "Poor")
+```
+
+Class - stroke vs control
+
+```{r}
+da_func_ec <- maaslin2_func(
+  lledos_func_filt,
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "class",
+  feattype = "EC",
+  out = "lledos_da_ec",
+  cores = 6
+)
+da_func_ec_df <- da_func_ec$results
+```
+
+```{r}
+da_func_py <- maaslin2_func(
+  lledos_func_filt,
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "class",
+  feattype = "pathways",
+  out = "lledos_func_filt",
+  cores = 6
+)
+da_func_py_df <- da_func_py$results
+```
+
+```{r}
+da_func_ec_sig <- da_func_ec_df %>% 
+  filter(qval < 0.05) %>% 
+  arrange(coef)
+da_func_py_sig <- da_func_py_df %>% 
+  filter(qval < 0.05) %>% 
+  arrange(coef)
+```
+
+Severity
+
+```{r}
+da_func_ec_sev <- maaslin2_func(
+  subset_samples_func(lledos_func_filt_stroke, "severity %in% c('mild (NIHSS <5)', 'moderate (NIHSS >5 <15)', 'severe (NIHSS >15)')"),
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "severity",
+  feattype = "EC",
+  out = "lledos_da_ec_sev",
+  reference="severity,mild (NIHSS <5)",
+  cores = 6
+)
+da_func_ec_sev_df <- da_func_ec_sev$results
+```
+
+```{r}
+da_func_py_sev <- maaslin2_func(
+  subset_samples_func(lledos_func_filt_stroke, severity %in% c('mild (NIHSS <5)', 'moderate (NIHSS >5 <15)', 'severe (NIHSS >15)')),
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "severity",
+  feattype = "pathways",
+  out = "lledos_da_py_sev",
+  reference="severity,mild (NIHSS <5)",
+  cores = 6
+)
+da_func_py_sev_df <- da_func_py_sev$results
+```
+
+```{r}
+da_func_ec_sev_sig <- da_func_ec_sev_df %>% 
+  filter(qval < 0.05) %>% 
+  arrange(coef)
+da_func_py_sev_sig <- da_func_py_sev_df %>% 
+  filter(qval < 0.05) %>% 
+  arrange(coef)
+```
+
+Outcome
+
+```{r}
+da_func_ec_outcome <- maaslin2_func(
+  subset_samples_func(lledos_func_filt_stroke, "outcome %in% c('Favourable', 'Poor')"),
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "outcome",
+  feattype = "EC",
+  out = "lledos_da_ec_outcome",
+  cores = 6
+)
+da_func_ec_outcome_df <- da_func_ec_outcome$results
+```
+
+```{r}
+da_func_py_outcome <- maaslin2_func(
+  subset_samples_func(lledos_func_filt_stroke_py, "outcome %in% c('Favourable', 'Poor')"),
+  prev_thresh = 0,
+  abun_thresh = 0,
+  fixed = "outcome",
+  feattype = "pathways",
+  out = "lledos_da_py_outcome",
+  cores = 6
+)
+da_func_py_outcome_df <- da_func_py_outcome$results
+```
+
+```{r}
+da_func_ec_outcome_sig <- da_func_ec_outcome_df %>% 
+  filter(qval < 0.25) %>% 
+  arrange(coef)
+da_func_py_outcome_sig <- da_func_py_outcome_df %>% 
+  filter(qval < 0.25) %>% 
+  arrange(coef)
+```
+
+##### tnaA outcome
+
+Check why so many are missing outcome here
+
+```{r}
+tnaa_outcome <- lledos_func$EC %>% 
+  t_df() %>% 
+  merge(lledos_func$Metadata, by=0) %>% 
+  filter(class != "TIA") %>% 
+  filter(bleed != 1)
+
+func_outcome_stroke <- tnaa_outcome %>% 
+  filter(class == "stroke") %>% 
+    # remove samples missing from tnaA analysis
+  filter(Row.names != "s119") %>% 
+  mutate(infection_any = case_when(respiratory_infection == 1 ~ 1,
+                                   other_infection == 1 ~ 1,
+                                   TRUE ~ 0)) %>%
+  mutate(outcome = case_when(mRS_90d %in% 0:2 ~ 0,
+                             mRS_90d <= 2 ~ 0,
+                             mRS_90d %in% 3:6 ~ 1,
+                             mRS_90d > 2 ~ 1)) %>% 
+  mutate(severity = case_when(nihss_in < 5 ~ "mild (NIHSS <5)",
+                                              nihss_in >= 5 & nihss_in < 15 ~ "moderate (NIHSS >5 <15)",
+                                              nihss_in >= 15 ~ "severe (NIHSS >15)")) 
+
+tnaa_outcome_stroke <- func_outcome_stroke %>% 
+  select(Row.names, `EC:4.1.99.1_Tryptophanase`, age, sex, hypertension, diabetes, nihss_in, severity, dyslipidemia, infection_any, outcome) %>% 
+  drop_na() %>% 
+  mutate(across(c(sex, hypertension, diabetes, dyslipidemia, infection_any, outcome), as.factor))
+```
+
+#### Overview table
+
+Bin tnaA into low and high
+
+```{r}
+tnaA_low_high <- quantile(tnaa_outcome_stroke$`EC:4.1.99.1_Tryptophanase`, probs = c(0.5))
+tnaa_outcome_stroke <- tnaa_outcome_stroke %>% 
+  mutate(tnaA_binned = case_when(`EC:4.1.99.1_Tryptophanase` < tnaA_low_high ~ "low",
+                          `EC:4.1.99.1_Tryptophanase` >= tnaA_low_high ~ "high")) %>% 
+  mutate(tnaA_binned = factor(tnaA_binned, levels = c("low", "high"))) 
+```
+
+```{r}
+# Variables to test
+variables <- c("tnaA_binned", "age", "sex", "hypertension", "diabetes", 
+               "nihss_in", "dyslipidemia", "infection_any")
+
+# Run univariate logistic regression
+tnaA_univariate <- lapply(variables, function(var) {
+  formula <- as.formula(paste("outcome ~", var))
+  glm(formula, data = tnaa_outcome_stroke, family = binomial)
+})
+
+tnaA_univariate_summary <- lapply(tnaA_univariate, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+
+# Combine results into a single dataframe
+tnaA_univariate_df <- do.call(rbind, tnaA_univariate_summary)
+```
+
+```{r}
+# Extract clean variable names
+tnaA_univariate_df <- tnaA_univariate_df %>%
+    filter(term != "(Intercept)") %>% 
+  mutate(clean_term = gsub("[0-9]+|[MF]$|TRUE|FALSE", "", term))  # Remove levels, M/F, TRUE/FALSE
+
+# Further customization for specific variables if needed
+clean_mapping <- c("tnaA_binnedhigh" = "tnaA (high)","sex" = "Sex", "age" = "Age", "hypertension" = "Hypertension", 
+                   "diabetes" = "Diabetes", "nihss_in" = "NIHSS Score Admission", 
+                   "dyslipidemia" = "Dyslipidemia", "infection_any" = "Infection (Any)")
+
+tnaA_univariate_df <- tnaA_univariate_df %>%
+  mutate(clean_term = recode(clean_term, !!!clean_mapping))
+```
+
+```{r}
+tnaA_univariate_df %>% 
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ paste0(round(estimate, digits = 2), " ***"),
+      p.value < 0.01 ~  paste0(round(estimate, digits = 2), " **"),
+      p.value < 0.05 ~  paste0(round(estimate, digits = 2), " *"),
+      TRUE ~ paste0(round(estimate, digits = 2), " "),
+    ),
+    term = factor(term, levels = term)  # Maintain the order of variables
+  ) %>% 
+  ggplot(aes(x = clean_term, y = estimate)) +
+  geom_point(size = 3, shape=15, aes(color=estimate > 1)) +  # Points for odds ratios
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15) +
+  geom_text(aes(label = significance), nudge_x = 0.4, hjust=0.5, size = 4, color = "black") +# Error bars
+  scale_y_log10() +  # Log scale for odds ratios
+  coord_flip() +  # Flip coordinates for better readability
+  labs(
+    title = "Univariate regression (n = 148)",
+    x ="",
+    y = "Odds Ratio (log scale)"
+  ) +
+  theme_cowplot() + 
+  scale_color_manual(values=c("dodgerblue", "firebrick1")) +
+  theme(axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.position = "None") + 
+  geom_hline(yintercept = 1, linetype="dashed",color="lightgrey")
+ggsave("figures/tnaA_univariate.pdf", device = "pdf", dpi=300, height = 5, width = 6)
+```
+
+```{r}
+multivariate_model <- glm(outcome ~ tnaA_binned + age + sex + hypertension + diabetes + 
+             nihss_in + dyslipidemia + infection_any, 
+             data = tnaa_outcome_stroke, family = binomial)
+#tidy(multivariate_model, conf.int = TRUE, exponentiate = TRUE)
+ 
+multivariate_model %>% 
+  tbl_regression(exponentiate = T, label = as.list(clean_mapping), show_single_row = c("sex", "hypertension", "diabetes", "dyslipidemia", "infection_any")) %>%
+  bold_p(t = 0.05) %>% 
+  as_gt() %>% 
+  gt::gtsave(filename = "multivariate_log_regression_tnaA.docx")
+```
+
+
+#### E. coli and tnaA univariate
+
+```{r}
+tnaa_e_coli_outcome <-  e_coli_outcome %>%
+  left_join(tnaa_outcome_stroke %>% select(Row.names, tnaA_binned), by = c("Sample" = "Row.names"))
+```
+
+```{r}
+# Variables to test
+variables <- c("s__Escherichia_coli", "tnaA_binned", "age", "sex", "hypertension", "diabetes", 
+               "nihss_in", "dyslipidemia", "infection_any")
+
+# Run univariate logistic regression
+tnaa_e_coli_univariate <- lapply(variables, function(var) {
+  formula <- as.formula(paste("outcome ~", var))
+  glm(formula, data = tnaa_e_coli_outcome, family = binomial)
+})
+
+
+tnaa_e_coli_univariate_summary <- lapply(tnaa_e_coli_univariate, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+
+# Combine results into a single dataframe
+tnaa_e_coli_univariate_df <- do.call(rbind, tnaa_e_coli_univariate_summary)
+
+```
+
+```{r}
+# Extract clean variable names
+tnaa_e_coli_univariate_df <- tnaa_e_coli_univariate_df %>%
+  filter(term != "(Intercept)") %>%
+  mutate(clean_term = gsub("[0-9]+|[MF]$|TRUE|FALSE", "", term)) # Remove levels, M/F, TRUE/FALSE
+
+# Further customization for specific variables if needed
+clean_mapping <- c(
+  "s__Escherichia_coli" = "Escherichia coli",
+  "tnaA_binnedhigh" = "tnaA (high)",
+  "sex" = "Sex (M)",
+  "age" = "Age",
+  "hypertension" = "Hypertension",
+  "diabetes" = "Diabetes",
+  "nihss_in" = "NIHSS Score Admission",
+  "dyslipidemia" = "Dyslipidemia",
+  "infection_any" = "Infection (Any)"
+)
+
+tnaa_e_coli_univariate_df <- tnaa_e_coli_univariate_df %>%
+  mutate(clean_term = recode(clean_term, !!!clean_mapping))
+```
+
+```{r}
+tnaa_e_coli_univariate_df %>% 
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ paste0(round(estimate, digits = 2), " ***"),
+      p.value < 0.01 ~  paste0(round(estimate, digits = 2), " **"),
+      p.value < 0.05 ~  paste0(round(estimate, digits = 2), " *"),
+      TRUE ~ paste0(round(estimate, digits = 2), " "),
+    )
+  ) %>% 
+  ggplot(aes(x = fct_relevel(clean_term, rev(c("Escherichia coli", "tnaA (high)", "Age", "Diabetes", "Dyslipidemia", "Hypertension", "Infection (Any)","NIHSS Score Admission", "Sex (M)"))), y = estimate)) +
+  geom_point(size = 3, shape=15, aes(color=estimate > 1)) +  # Points for odds ratios
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15) +
+  geom_text(aes(label = significance), nudge_x = 0.4, hjust=0.5, size = 4, color = "black") +# Error bars
+  scale_y_log10() +  # Log scale for odds ratios
+  coord_flip() +  # Flip coordinates for better readability
+  labs(
+    title = "Univariate regression (n = 148)",
+    x ="",
+    y = "Odds Ratio (log scale)"
+  ) +
+  theme_cowplot() + 
+  scale_color_manual(values=c("dodgerblue", "firebrick1")) +
+  theme(axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.position = "None") + 
+  geom_hline(yintercept = 1, linetype="dashed",color="lightgrey")
+ggsave("figures/E_coli_tnaA_univariate.pdf", device = "pdf", dpi=300, height = 5, width = 6)
+```
+
+#### Mediation analysis 
+
+Escherichia coli 
+```{r}
+library(mediation)
+
+
+```
+
+
+#### Interaction 
+
+For each
+
+Add elderly age variable to data
+```{r}
+tnaa_outcome_stroke <- tnaa_outcome_stroke %>% 
+  mutate(elderly = case_when(age >= 65 ~ 1,
+                            age < 65 ~ 0)) 
+```
+```{r}
+# Variables to test
+risk_factors <- c("elderly", "hypertension", "diabetes", "dyslipidemia")
+
+# Run univariate logistic regression
+tnaA_univariate_interaction <- lapply(risk_factors, function(var) {
+  formula <- as.formula(paste("outcome ~ tnaA_binned * ", var))
+  glm(formula, data = tnaa_outcome_stroke, family = binomial)
+})
+
+tnaA_univariate_interaction_summary <- lapply(tnaA_univariate_interaction, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+
+# Combine results into a single dataframe
+tnaA_univariate_interaction_df <- do.call(rbind, tnaA_univariate_interaction_summary) %>%
+  mutate(
+    p.adj = p.adjust(p.value, method = "BH")
+  )
+```
+
+Forest plots
+```{r}
+tnaA_univariate_interaction_df %>%
+    filter(term != "(Intercept)") %>% 
+    filter(term != "tnaA_binnedhigh") %>%
+    filter(grepl("tnaA_binnedhigh:", term)) %>%
+  mutate(clean_term = recode(term, !!!clean_mapping)) %>% 
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ paste0(round(estimate, digits = 2), " ***"),
+      p.value < 0.01 ~  paste0(round(estimate, digits = 2), " **"),
+      p.value < 0.05 ~  paste0(round(estimate, digits = 2), " *"),
+      TRUE ~ paste0(round(estimate, digits = 2), " "),
+    ),
+    term = factor(term, levels = term)  # Maintain the order of variables
+  ) %>% 
+  ggplot(aes(x = clean_term, y = estimate)) +
+  geom_point(size = 3, shape=15, aes(color=estimate > 1)) +  # Points for odds ratios
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15) +
+  geom_text(aes(label = significance), nudge_x = 0.4, hjust=0.5, size = 4, color = "black") +# Error bars
+  scale_y_log10() +  # Log scale for odds ratios
+  coord_flip() +  # Flip coordinates for better readability
+  labs(
+    title = "Univariate regression (n = 148)",
+    x ="",
+    y = "Odds Ratio (log scale)"
+  ) +
+  theme_cowplot() + 
+  scale_color_manual(values=c("dodgerblue", "firebrick1")) +
+  theme(axis.ticks.y = element_blank(),
+    axis.line.y = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.position = "None") + 
+  geom_hline(yintercept = 1, linetype="dashed",color="lightgrey")
+```
+
+
+
+Marginal effect plots 
+
+```{r}
+library(ggeffects)
+library(patchwork)
+
+marginal_plots <- lapply(risk_factors, function(rf) {
+  
+  # Refit the model
+  formula_str <- paste0("outcome ~ tnaA_binned * ", rf)
+  model <- glm(as.formula(formula_str), 
+               family = binomial(),
+               data = tnaa_outcome_stroke)
+  
+  # Generate marginal effects
+  pred <- ggpredict(model, terms = c("tnaA_binned [all]", rf))
+  
+  # Plot
+  plot(pred, log_y=T) +
+    labs(
+      title = tools::toTitleCase(rf),
+      x = "tnaA_binned",
+      y = "Predicted Probability",
+      color = rf
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+})
+
+# Combine
+wrap_plots(marginal_plots, ncol = 2) 
+```
+
+Check additional indole genes for association
+
+```{r}
+indole_genes <- read_tsv("../../AhR_metagenomics/data/indole_metabolism_ko_ec.txt")
+ec_ind_gene <- paste0("EC:", indole_genes$EC, "_")
+```
+
+```{r}
+indole_outcome_stroke <-  func_outcome_stroke %>% 
+  select(contains(ec_ind_gene), Row.names, age, sex, hypertension, diabetes, nihss_in, severity, dyslipidemia, infection_any, outcome) %>% 
+  drop_na() %>% 
+  mutate(across(c(sex, hypertension, diabetes, dyslipidemia, infection_any, outcome), as.factor))
+```
+
+```{r}
+ec_ind_gene <- colnames(indole_outcome_stroke %>% select(contains("EC", ignore.case = F)))
+# bin genes into low and high
+indole_low_high <- map(ec_ind_gene, function(x) quantile(indole_outcome_stroke[[x]], probs = c(0.5))) 
+names(indole_low_high) <- ec_ind_gene
+
+indole_outcome_stroke <- indole_outcome_stroke %>% 
+  mutate(across(all_of(ec_ind_gene), ~ case_when(. <= indole_low_high[[cur_column()]] ~ "low",
+                                                  . > indole_low_high[[cur_column()]] ~ "high"))) %>% 
+  mutate(across(all_of(ec_ind_gene), factor, levels = c("low", "high")))
+
+# Remove columns with single value e.g. all 0 
+indole_outcome_stroke <- indole_outcome_stroke %>% 
+   select(where(~ n_distinct(.x) > 1)) 
+  
+ec_ind_gene_reg <- paste0("`", colnames(indole_outcome_stroke %>% select(contains("EC", ignore.case = F))), "`")
+
+# Run univariate logistic regression
+indole_univariate <- lapply(ec_ind_gene_reg, function(var) {
+  formula <- as.formula(paste("outcome ~", var))
+  glm(formula, data = indole_outcome_stroke, family = binomial)
+})
+
+indole_univariate_summary <- lapply(indole_univariate, function(model) {
+  tidy(model, conf.int = TRUE, exponentiate = TRUE)
+})
+# Combine results into a single dataframe
+indole_univariate_df <- do.call(rbind, indole_univariate_summary)
+indole_univariate_df <- indole_univariate_df %>%
+  filter(term != "(Intercept)") %>% 
+  mutate(clean_term = gsub("[0-9]+|[MF]$|TRUE|FALSE", "", term))
+```
+
+##### Group comparisons
+
+```{r}
+tnaa_outcome %>% 
+  ggplot(aes(x = class, y = `EC:4.1.99.1_Tryptophanase`, color=class)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  scale_color_manual(values = cols) + 
+  theme_cowplot() + 
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("control", "stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") 
+ggsave("figures/tnaa_class.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+Male stroke patients vs male controls
+
+```{r}
+tnaa_outcome %>% 
+  filter(sex == "M") %>% 
+  ggplot(aes(x = class, y = `EC:4.1.99.1_Tryptophanase`, color=class)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  scale_color_manual(values = cols) + 
+  theme_cowplot() + 
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") 
+  stat_compare_means(comparisons = list(c("control", "stroke")),
+                     method = "wilcox.test",
+                     label = "p.format")
+ggsave("figures/tnaa_class_male_only.pdf", device = "pdf", dpi=300, height = 5, width = 6)
+```
+
+Stroke severity and outcome
+
+NIHSS score
+
+```{r}
+severity_comps <- make_pairwise_comparisons(tnaa_outcome_stroke, variable = "severity")
+
+tnaa_outcome_stroke %>% 
+  ggplot(aes(x =severity, class, y = `EC:4.1.99.1_Tryptophanase`, color=severity)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  theme_cowplot() + 
+  scale_color_manual(values = severity_pal) + 
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+    EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = severity_comps,
+                     method = "wilcox.test",
+                     label = "p.format") 
+ggsave("figures/tnaa_severity.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+```
+
+```{r}
+tnaa_outcome_stroke %>% 
+  filter(sex == "M") %>% 
+  ggplot(aes(x =severity, class, y = `EC:4.1.99.1_Tryptophanase`, color=severity)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  theme_cowplot() + 
+  scale_color_manual(values = severity_pal) +  
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+    EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = severity_comps,
+                     method = "wilcox.test",
+                     label = "p.format") 
+ggsave("figures/tnaa_severity_male_only.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+```
+
+Outcome
+
+```{r}
+tnaa_outcome_stroke %>% 
+  mutate(outcome =  case_when(outcome == 0 ~ "Favourable",
+                             outcome == 1 ~ "Poor")) %>%
+  ggplot(aes(x = outcome, class, y = `EC:4.1.99.1_Tryptophanase`, color=outcome)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values = outcome_pal) +
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+      EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("Favourable", "Poor")),
+                     method = "wilcox.test",
+                     label = "p.format")
+ggsave("figures/tnaa_outcome.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+```{r}
+tnaa_outcome_stroke %>%
+  mutate(outcome =  case_when(outcome == 0 ~ "Favourable",
+                             outcome == 1 ~ "Poor")) %>%
+  ggplot(aes(x = outcome, class, y = `EC:4.1.99.1_Tryptophanase`, color=outcome)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  theme_cowplot() + 
+  scale_color_manual(values = outcome_pal) + 
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None",
+    strip.background = element_rect(fill = "white", color = "black")) +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  facet_wrap(~sex) + 
+  stat_compare_means(comparisons = list(c("Favourable", "Poor")),
+                     method = "wilcox.test",
+                     label = "p.format")
+ggsave("figures/tnaa_outcome_sex_strat.pdf", device = "pdf", dpi=300, height = 5, width = 6)
+```
+
+## Question 4. Are indole-producers/tryptophanase enzymes still altered in chronic phase?
+
+Load and combine data from SMB and PRISE 
+
+```{r}
+load("../data/SMB_tax.RData")
+load("../data/PRISE_tax.RData")
+```
+
+```{r}
+ps_smb_norm <- ps_smb %>% transform()
+ps_prise_norm <- ps_prise %>% transform()
+```
+
+```{r}
+ps_chronic <- merge_phyloseq(ps_smb_norm, ps_prise_norm) %>% 
+  subset_samples(timepoint == "chronic" | class == "control") 
+```
+
+##### E. coli
+
+```{r}
+df_indole_producers_chronic <- ps_chronic %>%
+  transform("arcsin") %>% 
+  psmelt() %>% 
+  filter(grepl(paste(indole_species, collapse = "|"), Species)) %>% 
+  mutate(OTU = gsub("species:", "", OTU)) %>% 
+  filter(class != "TIA") 
+
+e_coli_stroke_chronic <- df_indole_producers_chronic %>%
+  filter(Species == "s__Escherichia_coli") %>% 
+  mutate(group2 = case_when(timepoint == "chronic" ~ "Chronic stroke",
+                            class == "control" ~ "Control"))
+```
+
+
+
+```{r}
+chronic_stroke_cols <- c("Chronic stroke" = "#74A57F", "Control" = "#424143")
+e_coli_stroke_chronic %>% 
+  ggplot(aes(x = fct_relevel(group2, "Control", "Chronic stroke"), y = Abundance, color=group2)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) + 
+  scale_color_manual(values = chronic_stroke_cols) + 
+  theme_cowplot() + 
+  ylab(paste0("Escherichia coli\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("Control", "Chronic stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") 
+ggsave("figures/e_coli_chronic_stroke.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+Is E. coli still associated with stroke outcome in chronic phase?
+
+```{r}
+e_coli_stroke_chronic_outcome <- e_coli_stroke_chronic %>% 
+  mutate(outcome = case_when(mRS_90d %in% 0:2 ~ "Favourable",
+                             mRS_90d <= 2 ~ "Favourable",
+                             mRS_90d %in% 3:6 ~ "Poor",
+                             mRS_90d > 2 ~ "Poor")) %>% 
+  filter(!is.na(outcome))
+glm(Abundance ~ outcome, data = e_coli_stroke_chronic_outcome, family = binomial) %>% 
+  tidy(exponentiate = T, conf.int = T) 
+```
+##### Tryptophanase
+
+```{r}
+load("../data/smb_func.RData")
+load("../data/prise_func.RData")
+
+smb_func$Metadata <- smb_func$Metadata %>% 
+  mutate(antibiotics = case_when(antibiotics == "Yes" ~ 1,
+                             antibiotics == "No" ~ 0))
+```
+
+```{r}
+tmp1 <- smb_func$EC %>% 
+  merge(smb_func$Metadata, by=0) %>% 
+  filter(class != "TIA") %>% 
+  filter(timepoint == "chronic" | class == "control")
+
+tmp2 <- prise_func$EC %>% 
+  merge(prise_func$Metadata, by=0)
+
+tnaa_outcome_chronic <- bind_rows(tmp1, tmp2) %>%
+  mutate(outcome = case_when(class == "control" ~ NA,
+                             mRS_90d %in% 0:2 ~ "Favourable",
+                             mRS_90d <= 2 ~ "Favourable",
+                             mRS_90d %in% 3:6 ~ "Poor",
+                             mRS_90d > 2 ~ "Poor")) %>% 
+  select(Row.names, `EC:4.1.99.1_Tryptophanase`, age, sex,timepoint, hypertension, nihss_in, dyslipidemia, outcome) %>% 
+  mutate(across(c(sex, hypertension, dyslipidemia, outcome), as.factor)) %>% 
+  mutate(group2 = case_when(timepoint == "chronic" ~ "Chronic stroke",
+                            TRUE ~ "Control"))
+
+```
+
+```{r}
+tnaa_outcome_chronic %>% 
+  ggplot(aes(x = fct_relevel(group2, "Control", "Chronic stroke"), y = `EC:4.1.99.1_Tryptophanase`, color=group2)) + 
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75, alpha=0.4) +  
+  scale_color_manual(values = chronic_stroke_cols) + 
+  theme_cowplot() + 
+  ylab(paste0("tnaA\n", "Asin(sqrt(rel. abundance))")) +
+  xlab("") +
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12),
+        legend.position = "None") +
+  stat_summary(fun.y = median, 
+               fun.ymin = median, 
+               fun.ymax = median, 
+               geom = "crossbar", 
+               width = 0.15, color="black") + 
+  EnvStats::stat_n_text() +
+  stat_compare_means(comparisons = list(c("Control", "Chronic stroke")),
+                     method = "wilcox.test",
+                     label = "p.format") 
+ggsave("figures/tnaA_chronic_stroke.pdf", device = "pdf", dpi=300, height = 4, width = 4.5)
+```
+
+`
+```{r}
+glm(`EC:4.1.99.1_Tryptophanase` ~ outcome, data = tnaa_outcome_chronic, family = binomial) %>% 
+  tidy(exponentiate = T, conf.int = T)
+```
+

@@ -33,18 +33,20 @@ Metabolon (Evans et al., 2014)."
 
 Load required libraries for analysis and source functions.
 
-```{r}
+```{r, include=FALSE}
 pacman::p_load(ropls,
                ggforce,
                caret,
                cowplot,
                ggpubr,
                POMA,
-               gghighlight)
+               gghighlight,
+               ggside)
 # load data as metabo list 
 source("../scripts/data_processing.R")
 source("../scripts/analysis_functions.R")
-dir.create("figures", showWarnings = F)
+conflicted::conflict_prefer_all("dplyr")
+conflicted::conflicts_prefer(purrr::map)
 ```
 
 ## Functions
@@ -87,6 +89,30 @@ il_metabo <- metabo_list(il_feat, il_meta, "SampleID")
 pl_metabo <- metabo_list(pl_feat, pl_meta, "SampleID")
 ```
 
+NOTE - currently issue with I3S - up in fMCAO in untargeted but down in targeted (ileum). Check normalisation and imputation 
+
+```{r}
+i3s_raw <- il_metabo$features["27672", ]
+i3s_raw %>%
+  pivot_longer(everything(), values_to = "value") %>%
+  ggplot(aes(value)) +
+  geom_histogram()
+```
+
+Plot by group 
+```{r}
+t(i3s_raw) %>% 
+  as.data.frame() %>% 
+  merge(il_meta %>% column_to_rownames("SampleID"), by=0) %>% 
+  #mutate(`27672`)
+  ggboxplot(y="`27672`", x="group", add="jitter")
+```
+
+```{r}
+il_meta %>% 
+  ggboxplot(y="sample_weight", x="group", add="jitter")
+```
+
 ## Filtering, imputation and normalization
 
 Here metabolite profiles are filtered removing those present in less
@@ -124,6 +150,9 @@ Normalisation using quantile normalisation
 
 Normalisation is performed using probabilistic quantile normalisation
 (Dieterle et al 2006, Analytical Chemistry).
+
+Sample weight normalisation also necessary? This needs to be checked, not clearly an issue based on i3s plots above but some of the 
+highest values do tend to have higher weight
 
 ```{r}
 il_metabo_norm <- pqn(il_metabo)
@@ -229,47 +258,51 @@ il_pca <- prcomp(t(il_metabo_norm$scaled.features))
 il_ev <- il_pca$sdev^2/sum(il_pca$sdev^2)
 ```
 
+Stat test PC1 PC2 
+
+```{r}
+stroke_samples <- il_metabo$sample.metadata %>% filter(group == "Stroke") %>% pull(SampleID)
+sham_samples <- il_metabo$sample.metadata %>% filter(group == "Sham") %>%  pull(SampleID)
+
+pc1_wilcox <- wilcox.test(il_pca$x[stroke_samples,"PC1"], il_pca$x[sham_samples,"PC1"])
+pc2_wilcox <- wilcox.test(il_pca$x[stroke_samples,"PC2"], il_pca$x[sham_samples,"PC2"])
+```
+
+
 ```{r}
 ileum_cols <- c("#414042","#FF9300")
 as.data.frame(il_pca$x)%>%
   add_column(Group=il_metabo_norm$sample.metadata$group,
              Infarct_volume=il_metabo_norm$sample.metadata$indir_inf_vol) %>%
   ggplot(aes(x=PC1, y=PC2, colour=Group, fill=Group, shape=Group)) +
-  geom_point(size=4) +
-  theme_pubr() +
+  
+  theme_bw() +
+  theme(panel.grid = element_blank()) + 
   scatter_theme +
+  geom_point(size=4) +
   scale_color_manual(values = ileum_cols) +
   scale_fill_manual(values= ileum_cols) + 
   xlab(paste0("PC", 1, " (", round(il_ev[1], 3)*100, "%)")) +
   ylab(paste0("PC", 2, " (", round(il_ev[2], 3)*100, "%)")) + 
-  stat_ellipse(geom = "polygon", alpha=0.1) 
-#ggsave("figures/PCA_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+  stat_ellipse(geom = "polygon", alpha=0.1)  + 
+  geom_ysideboxplot(
+    aes(fill = Group, y = PC2),
+    color = "black",
+    orientation = "x",
+  ) +
+  geom_xsideboxplot(
+    aes(fill = Group, y = PC1),
+    color = "black",
+    orientation = "y"
+  )
+ggsave("figures/PCA_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
 ```
 
-statistically detected outliers removed:
-
-excl CB48
+PCA Biplot
 
 ```{r}
-il_outliers <- unique(outliers_ileum$sample)
-il_filt <- colnames(il_metabo_norm$features)[!colnames(pl_metabo_norm$features) %in% il_outliers]
-il_filt_meta <- il_metabo_norm$sample.metadata %>% 
-  filter(!SampleID %in% il_outliers) 
-
-as.data.frame(il_pca$x)%>%
-  filter_rownames(il_filt) %>% 
-  add_column(Group=il_filt_meta$group,
-             Infarct_volume=il_filt_meta$indir_inf_vol) %>%
-  ggplot(aes(x=PC1, y=PC2, colour=Group, fill=Group, shape=Group)) +
-  geom_point(size=4) +
-  theme_pubr() +
-  scatter_theme +
-  scale_color_manual(values = ileum_cols) +
-  scale_fill_manual(values= ileum_cols) + 
-  xlab(paste0("PC", 1, " (", round(il_ev[1], 3)*100, "%)")) +
-  ylab(paste0("PC", 2, " (", round(il_ev[2], 3)*100, "%)")) + 
-  stat_ellipse(geom = "polygon", alpha=0.1)
-ggsave("figures/PCA_ileum_excl_outliers.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+factoextra::fviz_pca_biplot(il_pca, repel = TRUE, select.var = list(contrib = 25)) + 
+  scatter_theme
 ```
 
 #### Plasma PCA
@@ -279,6 +312,15 @@ pl_pca <- prcomp(t(pl_metabo_norm$scaled.features))
 pl_ev <- pl_pca$sdev^2/sum(pl_pca$sdev^2)
 ```
 
+Stat test PC1 PC2 
+
+```{r}
+pc1_wilcox_pl <- wilcox.test(pl_pca$x[stroke_samples,"PC1"], pl_pca$x[sham_samples,"PC1"])
+pc2_wilcox_pl <- wilcox.test(pl_pca$x[stroke_samples,"PC2"], pl_pca$x[sham_samples,"PC2"])
+```
+
+
+
 ```{r}
 plasma_cols <- c("#9C9C9C","#D52D2D")
 as.data.frame(pl_pca$x)%>%
@@ -286,13 +328,24 @@ as.data.frame(pl_pca$x)%>%
              Infarct_volume=pl_metabo_norm$sample.metadata$indir_inf_vol) %>%
   ggplot(aes(x=PC1, y=PC2, colour=Group, fill=Group, shape=Group)) +
   geom_point(size=4) +
-  theme_pubr() +
+  theme_bw() +
+  theme(panel.grid = element_blank()) + 
   scatter_theme +
   scale_color_manual(values = plasma_cols) +
   scale_fill_manual(values= plasma_cols) + 
   xlab(paste0("PC", 1, " (", round(pl_ev[1], 3)*100, "%)")) +
   ylab(paste0("PC", 2, " (", round(pl_ev[2], 3)*100, "%)")) + 
-  stat_ellipse(geom = "polygon", alpha=0.1)
+  stat_ellipse(geom = "polygon", alpha=0.1) + 
+  geom_ysideboxplot(
+    aes(fill = Group, y = PC2),
+    color = "black",
+    orientation = "x",
+  ) +
+  geom_xsideboxplot(
+    aes(fill = Group, y = PC1),
+    color = "black",
+    orientation = "y"
+  )
 ggsave("figures/PCA_plasma.pdf", device = "pdf", dpi=300, height = 8, width = 10)
 ```
 
@@ -403,6 +456,17 @@ kegg_id_str <- sig_ileum_str_0.25 %>% pull(KEGG)
 kegg_id_sham <- sig_ileum_sham_0.25 %>% pull(KEGG)
 ```
 
+Write out kegg ids for AMON
+
+```{r}
+fileConn <-file("results/KEGG_ids_stroke_0.25.txt")
+writeLines(kegg_id_str, fileConn)
+close(fileConn)
+
+fileConn<-file("results/KEGG_ids_sham_0.25.txt")
+writeLines(kegg_id_sham, fileConn)
+close(fileConn)
+```
 
 Since we are interested in AHR ligands here we will look more
 specifically at these.
@@ -419,7 +483,7 @@ indole_derived <- c("2-oxindole-3-acetate",  "indoleacetylglycine",
 kynurenine_derived <- c("xanthurenate", "kynurenate","kynurenine", "anthranilate", "quinolinate")
 serotonin_derived <- c("serotonin")
 tryptophan_metabolites <- il_metabo_norm$feature.metadata %>% filter(`SUB PATHWAY`== "Tryptophan Metabolism") %>% 
-  pull(`BIOCHEMICAL`)
+  pull(`Metabolite`)
 ```
 
 ```{r}
@@ -432,12 +496,12 @@ microbiome_derived <- c("3-indoxyl sulfate", "indolelactate", "3-formylindole")
 
 ```{r, fig.height=12, fig.width=5}
 ileum_fc_ahr <- ileum_fc %>% 
-  select(BIOCHEMICAL, Log2FC, p.adj, `SUPER PATHWAY`, `SUB PATHWAY`) %>% 
-  mutate(AHR = case_when(BIOCHEMICAL %in% ahr_ligands ~ "AHR", 
+  select(Metabolite, Log2FC, p.adj, `SUPER PATHWAY`, `SUB PATHWAY`) %>% 
+  mutate(AHR = case_when(Metabolite %in% ahr_ligands ~ "AHR", 
                          TRUE ~ "other")) %>% 
-  mutate(Trp_pathway = case_when(BIOCHEMICAL %in% indole_derived ~ "Indole Pyruvate Pathway",
-                                 BIOCHEMICAL %in% kynurenine_derived ~ "Kynurenine Pathway",
-                                 BIOCHEMICAL %in% serotonin_derived ~ "Serotonin Pathway",
+  mutate(Trp_pathway = case_when(Metabolite %in% indole_derived ~ "Indole Pyruvate Pathway",
+                                 Metabolite %in% kynurenine_derived ~ "Kynurenine Pathway",
+                                 Metabolite %in% serotonin_derived ~ "Serotonin Pathway",
                                  TRUE ~ "Other")) %>% 
   mutate(sig = case_when(p.adj <= 0.05 ~ "*",
                          p.adj <= 0.1 ~ "+",
@@ -448,7 +512,7 @@ hm.palette <- cartography::carto.pal("orange.pal", n1 = 13)
 
 
 ahr_ligands_il <-
-  ggplot(filter(ileum_fc_ahr, Trp_pathway != "Other"), aes(x = 1,y = BIOCHEMICAL, fill = Log2FC)) + 
+  ggplot(filter(ileum_fc_ahr, Trp_pathway != "Other"), aes(x = 1,y = Metabolite, fill = Log2FC)) + 
   geom_tile() + 
   scale_fill_gradientn(colours = alpha(hm.palette, 0.87)) +
   xlab("")  +
@@ -478,11 +542,11 @@ Host derived vs microbiome-derived
 
 ```{r}
 ileum_fc_ahr_source <- ileum_fc %>% 
-  select(BIOCHEMICAL, Log2FC, p.adj, `SUPER PATHWAY`, `SUB PATHWAY`) %>% 
-  mutate(AHR = case_when(BIOCHEMICAL %in% ahr_ligands ~ "AHR", 
+  select(Metabolite, Log2FC, p.adj, `SUPER PATHWAY`, `SUB PATHWAY`) %>% 
+  mutate(AHR = case_when(Metabolite %in% ahr_ligands ~ "AHR", 
                          TRUE ~ "other")) %>% 
-  mutate(Source = case_when(BIOCHEMICAL %in% host_derived ~ "Host-derived AHR ligands",
-                                 BIOCHEMICAL %in% microbiome_derived ~ "Microbiome-derived AHR ligands",
+  mutate(Source = case_when(Metabolite %in% host_derived ~ "Host-derived AHR ligands",
+                                 Metabolite %in% microbiome_derived ~ "Microbiome-derived AHR ligands",
                                  TRUE ~ "Other")) %>% 
   mutate(sig = case_when(p.adj <= 0.05 ~ "*",
                          p.adj <= 0.1 ~ "+",
@@ -490,7 +554,7 @@ ileum_fc_ahr_source <- ileum_fc %>%
                          TRUE ~ "")) 
 
 ahr_ligands_source_il <-
-  ggplot(filter(ileum_fc_ahr_source, Source != "Other"), aes(x = 1,y = BIOCHEMICAL, fill = Log2FC)) + 
+  ggplot(filter(ileum_fc_ahr_source, Source != "Other"), aes(x = 1,y = Metabolite, fill = Log2FC)) + 
   geom_tile() + 
   scale_fill_gradientn(colours = alpha(hm.palette, 0.87)) +
   xlab("")  +
@@ -616,7 +680,7 @@ actual FC) and adjusted p-value threshold of 0.05 is used.
 Coloured by group
 
 ```{r}
-plot_volcano(ileum_fc, groups = c("Sham", "Stroke"), names = ileum_fc$BIOCHEMICAL, pointSize = 3) + 
+plot_volcano(ileum_fc, groups = c("Sham", "Stroke"), names = ileum_fc$Metabolite, pointSize = 3) + 
   xlim(c(-5, 3)) +
   ylim(c(0, 3))
 ggsave("figures/ileum_volcano.pdf", device = "pdf", dpi=300, height = 9, width = 8)
@@ -724,7 +788,7 @@ ggsave("figures/plasma_volcano_classes.pdf", device = "pdf", dpi=300, height = 9
 ```{r}
 feat_long_il <- il_metabo_norm$log.features %>% 
   as.data.frame()
-rownames(feat_long_il) <- il_metabo_norm$feature.metadata$BIOCHEMICAL
+rownames(feat_long_il) <- il_metabo_norm$feature.metadata$Metabolite
 
 feat_long_il <- feat_long_il %>% 
   rownames_to_column("Metabolite") %>% 
@@ -783,6 +847,35 @@ for (i in tryptophan_metabolites){
           plot.title = element_text(size=16, hjust = 0.75)) 
   print(p)
   ggsave(filename = paste0("figures/Trp_ileum/", i, "_ileum.pdf"), p, device="pdf", dpi=300, height=4.25, width=2.5)
+}
+```
+
+##### Other metabolites 
+
+```{r}
+other_metabolites <- c("stachyose", "orotate", "glucose", "pyruvate","lactate", "glycerol", "malate", "oxaloacetate")
+```
+
+```{r}
+dir.create("figures/other_metabolites_ileum")
+
+for (i in other_metabolites){
+  sub <- filter(feat_long_meta_il, Metabolite == i)
+  print(sub)
+
+  p <- ggstripchart(sub, x="group", y="value", color = "group", palette = ileum_cols,
+                    xlab = "", ylab = "LogInt", size = 4, jitter = 0.05, 
+                    add = "mean_sd", add.params = list(color="black"), order = c("Sham", "Stroke"),
+                    error.plot = c("errorbar"), title = i)  + 
+    stat_summary(geom = "crossbar", fun = mean, colour="black",linewidth=0.4, width=0.15) +
+  stat_compare_means(comparisons = list(c("Sham", "Stroke")), method = "t.test", label = "p.format") + 
+    theme_pubr() +
+    theme(legend.position = "None",
+          axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          plot.title = element_text(size=16, hjust = 0.75))
+  ggsave(filename = paste0("figures/other_metabolites_ileum/", i, "_ileum.pdf"), p, device="pdf", dpi=300, height=4.25, width=2.5)
+  print(p)
 }
 ```
 
@@ -845,6 +938,30 @@ for (i in tryptophan_metabolites){
           plot.title = element_text(size=16, hjust = 0.75))
   print(p)
   ggsave(filename = paste0("figures/Trp_plasma/", i, "_plasma.pdf"), p, device="pdf", dpi=300, height=4.25, width=2.5)
+}
+```
+##### Other metabolites 
+
+```{r}
+dir.create("figures/other_metabolites_plasma")
+
+for (i in other_metabolites){
+  sub <- filter(feat_long_meta_pl, Metabolite == i)
+  print(sub)
+
+  p <- ggstripchart(sub, x="group", y="value", color = "group", palette = plasma_cols,
+                    xlab = "", ylab = "LogInt", size = 4, jitter = 0.05, 
+                    add = "mean_sd", add.params = list(color="black"), order = c("Sham", "Stroke"),
+                    error.plot = c("errorbar"), title = i)  + 
+    stat_summary(geom = "crossbar", fun = mean, colour="black",linewidth=0.4, width=0.15) +
+  stat_compare_means(comparisons = list(c("Sham", "Stroke")), method = "t.test", label = "p.format") + 
+    theme_pubr() +
+    theme(legend.position = "None",
+          axis.title = element_text(size=14),
+          axis.text = element_text(size=12),
+          plot.title = element_text(size=16, hjust = 0.75))
+  ggsave(filename = paste0("figures/other_metabolites_plasma/", i, "_plasma.pdf"), p, device="pdf", dpi=300, height=4.25, width=2.5)
+  print(p)
 }
 ```
 
@@ -1047,9 +1164,9 @@ stroke_enriched_il <- ileum_fc %>%
 
 ```{r}
 primary <- res_ileum %>% filter(`SUB PATHWAY` == "Primary Bile Acid Metabolism") %>% 
-  pull(BIOCHEMICAL)
+  pull(Metabolite)
 secondary <- res_ileum %>% filter(`SUB PATHWAY` == "Secondary Bile Acid Metabolism")  %>% 
-  pull(BIOCHEMICAL)
+  pull(Metabolite)
 ```
 
 "Animated plot"
@@ -1060,7 +1177,7 @@ base_plot <- EnhancedVolcano(res_ileum, lab = NA,x="Log2FC", y="p.adj",pointSize
                 ylim = c(0,3), caption = NULL, subtitle = NULL, gridlines.major = F, 
                 gridlines.minor = F, title = NULL, legendLabSize = 9.5)
 base_plot
-ggsave("figures/base_plot_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+ggsave("../../../Metagenomics/mouse_stool/analysis/Rosa_thesis//base_plot_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
 keyvals_lipids <- keyvals 
 keyvals_lipids[keyvals_lipids != "#009091"] <- "lightgrey"
 lipids <- EnhancedVolcano(res_ileum, lab = NA,x="Log2FC", y="p.adj",pointSize = 4,
@@ -1068,22 +1185,26 @@ lipids <- EnhancedVolcano(res_ileum, lab = NA,x="Log2FC", y="p.adj",pointSize = 
                 ylim = c(0,3), caption = NULL, subtitle = NULL, gridlines.major = F, 
                 gridlines.minor = F, title = NULL, legendLabSize = 9.5)
 lipids
-ggsave("figures/lipids_plot_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+ggsave("../../../Metagenomics/mouse_stool/analysis/Rosa_thesis//lipids_plot_ileum.pdf", device = "pdf", dpi=300, height = 8, width = 10)
 
-lipids_primary <- EnhancedVolcano(res_ileum, lab = res_ileum$BIOCHEMICAL,x="Log2FC", y="p.adj",pointSize = 4,
+lipids_primary <- EnhancedVolcano(res_ileum, lab = res_ileum$Metabolite,x="Log2FC", y="p.adj",pointSize = 4,
                 colCustom  = keyvals_lipids, FCcutoff = 0.58, pCutoff = 0.05, xlim = c(-5, 3), 
                 ylim = c(0,3), caption = NULL, subtitle = NULL, gridlines.major = F, 
                 gridlines.minor = F, title = NULL, legendLabSize = 9.5,
                 selectLab = primary,drawConnectors = TRUE, labSize = 4)
 lipids_primary
-ggsave("figures/lipids_plot_ileum_primary.pdf", device = "pdf", dpi=300, height = 8, width = 10)
-lipids_secondary <- EnhancedVolcano(res_ileum, lab = res_ileum$BIOCHEMICAL,x="Log2FC", y="p.adj",pointSize = 4,
+ggsave("../../../Metagenomics/mouse_stool/analysis/Rosa_thesis//lipids_plot_ileum_primary.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+lipids_secondary <- EnhancedVolcano(res_ileum, lab = res_ileum$Metabolite,x="Log2FC", y="p.adj",pointSize = 4,
                 colCustom  = keyvals_lipids, FCcutoff = 0.58, pCutoff = 0.05, xlim = c(-5, 3), 
                 ylim = c(0,3), caption = NULL, subtitle = NULL, gridlines.major = F, 
                 gridlines.minor = F, title = NULL, legendLabSize = 9.5,
                 selectLab = secondary,drawConnectors = TRUE, labSize = 4)
 lipids_secondary
-ggsave("figures/lipids_plot_ileum_secondary.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+ggsave("../../../Metagenomics/mouse_stool/analysis/Rosa_thesis//lipids_plot_ileum_secondary.pdf", device = "pdf", dpi=300, height = 8, width = 10)
+```
+
+```{r}
+
 ```
 
 ```{r}
@@ -1143,4 +1264,41 @@ EnhancedVolcano(res_ileum, lab = NA,x="Log2FC", y="p.adj",pointSize = 4,
                 ylim = c(0,3), caption = NULL, subtitle = NULL, gridlines.major = F, 
                 gridlines.minor = F, title = NULL,colAlpha = 0.15, legendLabSize = 9.5)
 ggsave("figures/ileum_volcano_samuele_colored.pdf", device = "pdf", dpi=300, height = 9.5, width = 9)
+```
+
+### Xenobiotics heatmap 
+
+
+```{r}
+xenobiotics <- il_metabo_norm$feature.metadata %>% 
+  filter(`SUPER PATHWAY` == "Xenobiotics") 
+  
+xenobiotic_ids <- xenobiotics %>% 
+  rownames()
+```
+
+
+```{r}
+il_xenobiotics <- il_metabo_norm$scaled.features %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Metabolite") %>% 
+  filter(Metabolite %in% xenobiotic_ids) %>% 
+  column_to_rownames("Metabolite")
+```
+
+```{r}
+rownames(il_xenobiotics) == rownames(xenobiotics)
+```
+
+```{r}
+rownames(il_xenobiotics) <- xenobiotics$Metabolite
+```
+
+```{r}
+pdf(file="Xenobiotic_heatmap.pdf", width=14, height=11)
+ht <- ComplexHeatmap::Heatmap(il_xenobiotics, show_row_names = T, show_column_names = F, 
+                    cluster_rows = T, cluster_columns = T, name = "Scaled Intensity",
+                    column_split = il_metabo_norm$sample.metadata$group)
+ComplexHeatmap::draw(ht)
+dev.off()
 ```
