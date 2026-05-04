@@ -49,18 +49,21 @@ were used in both cases, to increase the number of identified taxa.
 library(microViz)
 library(ComplexHeatmap)
 library(ggplotify)
+library(tidytext)
 source("../scripts/shotgun_analysis_utils.R")
 source("../scripts/taxa_analysis.R")
 metaphlan_path <- "../data/metaphlan4.1/merged_table/merged_table.txt"
 conflicted::conflict_prefer_all("dplyr")
 conflicted::conflicts_prefer(vegan::diversity)
 conflicted::conflicts_prefer(purrr::map)
-dir.create("tax_figures", showWarnings = F)
 ```
 
 ```{r}
+cols <- c("sham"= "#5E5E5E","fMCAO" = "#D00000",mild = "#5E5E5E", "moderate" = "#FF7E79","severe" = "#D00000")
+```
+```{r}
 metaphlan_species <- import_pseq_metag(merged_table_path = metaphlan_path,
-                                           metapath = "../data/ahr_ileum_metadata.txt",
+                                           metapath = "../data/ahr_metadata-2025.txt",
                                            level = "species") %>% 
   transform()
 ```
@@ -72,91 +75,271 @@ metaphlan_species <- metaphlan_species %>%
   ps_mutate(sampleID = sample_ids)
 ```
 
-### Analysis 
+### Combined ileum and stool analysis 
+
+```{r}
+metaphlan_species <- metaphlan_species %>% 
+  subset_samples(sampleID = sample_ids)
+```
 
 Relatively simple alpha-diversity metrics and beta-diversity based on bray-curtis 
-distance.
+and/or jaccard.
 
 #### Analysis - alpha diversity 
 
 ```{r}
-cols <- c("sham"= "#012A36","fMCAO" = "#D00000",mild = "#012A36", "moderate" = "#A42CD6","severe" = "#D00000")
+
 alpha_metaphlan <- calc_alpha(metaphlan_species) %>% 
   merge(meta_to_df(metaphlan_species), by=0)
+comps <- list(c("sham", "fMCAO"))
+sev_comps <- list(c("mild", "moderate"), c("mild", "severe"), c("moderate", "severe"))
 
+capitalize <- function(string) {
+  substr(string, 1, 1) <- toupper(substr(string, 1, 1))
+  string
+  }
 ```
 
-plots
+```{r}
+alpha_metaphlan %>%
+  ggplot(aes(x = fct_relevel(condition, "sham", "fMCAO"), y = Richness, color = condition)) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.1),
+    size = 4,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  scale_color_manual(values = cols)+
+  ylab("Species Richness") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None"
+  ) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  facet_grid(~sample_type, labeller = labeller(sample_type = capitalize)) + 
+  stat_compare_means(
+    comparisons = comps,
+    method = "wilcox.test",
+    label = "p.format"
+  ) + 
+  theme(strip.background =element_rect(fill="white", color="black")) + 
+  rotate_x_text(45)
+ggsave("tax_figures/richness_sham_vs_fMCAO.pdf", device=cairo_pdf,dpi=300, height=4.5, width=5)
+```
 
 ```{r, fig.height=4, fig.width=4.5}
-plot_boxplot(alpha_metaphlan, variable_col = "condition", value_col = "Richness", comparisons_list = list(c("sham", "fMCAO")), fill_var = "condition", group.order = c("sham", "fMCAO"), cols = cols)  
+alpha_metaphlan %>%
+  ggplot(aes(x = fct_relevel(condition, "sham", "fMCAO"), y = Richness)) +
+  geom_jitter(
+    aes(shape = severity, color = severity), # Move aesthetics here
+    position = position_jitter(width = 0.1, height=0.1), # Use regular jitter, not jitterdodge
+    size = 4,
+    alpha = 0.5
+  ) +
+  theme_cowplot() +
+  scale_color_manual(values = cols) +
+  ylab("Species Richness") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "bottom",
+    legend.justification = "centre"
+  ) +
+  stat_summary(
+    fun = median, # Updated syntax (fun.y is deprecated)
+    fun.min = median, # Updated syntax
+    fun.max = median, # Updated syntax
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  facet_grid(~sample_type, labeller = labeller(sample_type = capitalize)) +
+  stat_compare_means(
+    comparisons = comps,
+    method = "wilcox.test",
+    label = "p.format"
+  ) +
+  theme(strip.background = element_rect(fill = "white", color = "black")) +
+  rotate_x_text(45)
+
+ggsave("tax_figures/richness_sham_vs_fMCAO_w_sev_colour.pdf", device=cairo_pdf,dpi=300, height=4.75, width=5)
 ```
 ```{r}
-comps <- list(c("mild", "moderate"), c("mild", "severe"), c("moderate", "severe"))
-plot_boxplot(alpha_metaphlan, variable_col = "severity", value_col = "Richness", comparisons_list = comps, fill_var = "condition", group.order = c("mild", "moderate", "severe"), multiple_groups = T, cols = cols) 
+alpha_metaphlan %>%
+  ggplot(aes(x = fct_relevel(severity, "mild", "moderate", "severe"), y = Richness, color = severity, shape=sample_type)) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.width = 0.1),
+    size = 4,
+    alpha = 0.4
+  ) +
+  theme_cowplot() +
+  scale_color_manual(values = cols)+
+  ylab("Species Richness") +
+  xlab("") +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.position = "None"
+  ) +
+  stat_summary(
+    fun.y = median,
+    fun.ymin = median,
+    fun.ymax = median,
+    geom = "crossbar",
+    width = 0.15,
+    color = "black"
+  ) +
+  facet_grid(~sample_type, labeller = labeller(sample_type = capitalize)) + 
+  stat_compare_means(
+    comparisons = sev_comps,
+    method = "wilcox.test",
+    label = "p.format"
+  ) + 
+  theme(strip.background =element_rect(fill="white", color="black")) + 
+  rotate_x_text(45)
+ggsave("tax_figures/richness_severity.pdf", device=cairo_pdf,dpi=300, height=4.5, width=5.25)
 ```
+
+
+Beta-div and PCoA
+```{r}
+beta_metaphlan_il_stool <-
+  calc_betadiv(
+    transform(metaphlan_species, "arcsin"),
+    dist = "bray",
+    ord_method = "NMDS"
+  )
+```
+
+PERMANOVA - sample_type
+severity ~ sample_type
+
+
+```{r}
+severity_adonis <- phyloseq_adonis(metaphlan_species, beta_metaphlan_il_stool$Distance_Matrix,group_variable = "severity")
+sample_type_adonis <- phyloseq_adonis(metaphlan_species, beta_metaphlan_il_stool$Distance_Matrix,group_variable = "sample_type")
+interaction <- phyloseq_adonis(metaphlan_species, beta_metaphlan_il_stool$Distance_Matrix,group_variable = "severity*sample_type")
+```
+
+```{r}
+plot_beta_div(metaphlan_species, beta_metaphlan_il_stool$Distance_Matrix, shape = "sample_type",beta_metaphlan_il_stool$Ordination, group_variable = "condition", cols = rev(cols[c(1,2)])) 
+
+ggsave2("tax_figures/betadiv_il_stool_NMDS.pdf", device = "pdf", dpi = 300, height = 4, width = 5)
+```
+
+Stratified by severity 
+
+```{r}
+plot_beta_div(
+  metaphlan_species,
+  beta_metaphlan_il_stool$Distance_Matrix,
+  shape = "sample_type",
+  beta_metaphlan_il_stool$Ordination,
+  group_variable = "severity",
+  cols = rev(cols[c(3, 4, 5)])
+) +
+  labs(
+    caption = bquote(atop(
+      Severity ~ - ~ Adonis ~ R^2 ~ .(round(severity_adonis$R2[1], 2)) ~ ~ p - value ~ .(severity_adonis$`Pr(>F)`[1]),
+      Sample ~ type ~ - ~ Adonis ~ R^2 ~ .(round(sample_type_adonis$R2[1], 2)) ~ ~ p - value ~ .(sample_type_adonis$`Pr(>F)`[1]),
+      Interaction ~ - ~ Adonis ~ R^2 ~ .(round(interaction$R2[1], 2)) ~ ~ p - value ~ .(interaction$`Pr(>F)`[1])
+    ))
+  ) 
+ggsave2(
+  "tax_figures/betadiv_il_stool_NMDS_sev.pdf",
+  device = "pdf",
+  dpi = 300,
+  height = 4.25,
+  width = 5
+)
+```
+
+
+### Analysis ileum
 
 #### Analysis - bray-curtis 
 
 ```{r}
+metaphlan_ileum <- metaphlan_species %>% 
+  subset_samples(sample_type == "ileum")
+
+```
+```{r}
+# metaphlan
 beta_metaphlan <-
-  calc_betadiv(transform(metaphlan_species, "arcsin"),
+  calc_betadiv(transform(metaphlan_ileum, "arcsin"),
                dist = "bray",
                ord_method = "NMDS")
 
 
 beta_metaphlan_exc_severe <-
   calc_betadiv(
-    subset_samples(transform(metaphlan_species, "arcsin"), severity != "severe"),
+    subset_samples(transform(metaphlan_ileum, "arcsin"), severity != "severe"),
     dist = "bray",
     ord_method = "NMDS"
   )
 ```
 
 ```{r}
-plot_beta_div(metaphlan_species, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "condition", cols = rev(cols[c(1,2)])) 
+plot_beta_div(metaphlan_ileum, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "condition", cols = rev(cols[c(1,2)])) 
 
-ggsave2("tax_figures/betadiv_NMDS.pdf", device = "pdf", dpi = 300, height = 4, width = 7)
+#p +
+ # geom_text(data = p$data, aes(x=NMDS1, y=NMDS2, label=sampleID), inherit.aes = F, nudge_y=0.05)
+
+ggsave2("tax_figures/betadiv_NMDS_ileum.pdf", device = "pdf", dpi = 300, height = 4, width = 5)
 ```
 
 ```{r}
-plot_beta_div(metaphlan_species, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "severity", cols = cols)
+plot_beta_div(metaphlan_ileum, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "severity", cols = cols)
+#p + geom_text(data = p$data, aes(x=NMDS1, y=NMDS2, label=sampleID), inherit.aes = F, nudge_y=0.05)
 ggsave2("tax_figures/betadiv_severity_NMDS.pdf", device = "pdf", dpi = 300, height = 4, width = 7)
 ```
+
 
 ##### Coloured by tnaA abundance
 
 ```{r}
-indole_genes <- read_tsv("../data/indole_metabolism_ko_ec.txt")
-meta_path <- "../data/ahr_ileum_metadata.txt"
-ec_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv"
-un_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_relab_unstratified.tsv"
-ko_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_ko_unstratified.tsv"
-py_path <- "../data/humann/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv"
+indole_genes_df <- read_tsv("../data/indole_metabolism_ko_ec.txt")
+meta_path <- "../data/ahr_metadata-2025.txt"
+ec_path <- "../data/humann_com/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv"
+#un_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_relab_unstratified.tsv"
+ko_path <- "../data/humann_com/merged_table/unstrat/humann_genefamilies_ko_unstratified.tsv"
+py_path <- "../data/humann_com/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv"
 source("../../../Metagenomics/scripts/func_analysis.R")
 func_profile <- import_func_profile(meta =meta_path,
-                                    un = un_path,
                                     ec = ec_path,
                                     ko = ko_path,
                                     py = py_path, 
-                                    filter_ungrouped = T, read = T, renorm=T) %>% 
-  transform_func(transform = "relative")
-dir.create("indole_analysis", showWarnings = F)
-```
+                                    filter_ungrouped = T, read = T, renorm=T) 
+func_profile_ileum <- subset_samples_func(func_profile, "sample_type == 'ileum'") %>% 
+   transform_func(transform = "relative") #%>% 
+  #  transform_func(transform = "arcsin")
+``` 
 Filter for genes of interest and add to metadata 
 
 ```{r}
-ec_goi <- func_profile$EC %>% 
-  select(contains(indole_genes$EC))
-ko_goi <- func_profile$KO %>% 
-  select(contains(indole_genes %>% drop_na(KO) %>% .$KO))
+indole_genes <- paste0("EC:", indole_genes_df$EC, "_")
+ec_goi <- func_profile_ileum$EC %>% 
+  select(contains(indole_genes))
+ko_goi <- func_profile_ileum$KO %>% 
+  select(contains(indole_genes_df %>% drop_na(KO) %>% .$KO))
 ```
 
 ```{r}
-meta_ec <- meta_to_df(metaphlan_species) %>% 
+meta_ec <- meta_to_df(metaphlan_ileum) %>% 
   merge(ec_goi, by=0) %>% 
   column_to_rownames("Row.names")
-sample_data(metaphlan_species) <- meta_ec
+sample_data(metaphlan_ileum) <- meta_ec
 ```
 
 NMDS plots colored by abundance of indole metabolism associated enzymes - EC
@@ -168,11 +351,12 @@ ggsave3 <- function(...) {
 }
 ```
 
+This currently doesn't work well because of the large gap between the 3 high samples (1 mild and 2 severe) and the other samples where it was detected - how to fix this? 
 
 ```{r}
-enzymes <- colnames(meta_to_df(metaphlan_species) %>% select(contains("EC")))
+enzymes <- colnames(meta_to_df(metaphlan_ileum) %>% select(contains("EC")))
 
-map(enzymes, function(x) plot_beta_div(metaphlan_species, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = x) +
+map(enzymes, function(x) plot_beta_div(metaphlan_ileum, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = x) +
   scale_color_viridis_c(alpha = 1, option = "viridis", oob=scales::squish, guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F)) + 
     ggtitle(x) + 
     ggsave3(paste0("indole_analysis/", x, "_NMDS.pdf"), device = "pdf", dpi = 300, height = 4, width = 6))
@@ -187,29 +371,46 @@ cont_pal <- c("#FFFFFF","#FFC3C6FF","#FB535EFF", "#F94A56FF","#EA2439FF", "#D51F
 
 
 ```{r}
-plot_beta_div(metaphlan_species, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "severity_score") +
+plot_beta_div(metaphlan_ileum, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "severity_score") +
   scale_color_gradientn(colours = cont_pal, guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F)) +
+  #paletteer::scale_color_paletteer_c("grDevices::Reds 3",direction = -1) +
     ggtitle("severity score") +
     ggsave3("indole_analysis/severity_score_NMDS_rw.pdf", device = "pdf", dpi = 300, height = 4, width = 5)
 ```
 tnaA same colors as stroke severity 
 
 ```{r}
-plot_beta_div(metaphlan_species, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "EC.4.1.99.1_Tryptophanase") +
+plot_beta_div(metaphlan_ileum, beta_metaphlan$Distance_Matrix, beta_metaphlan$Ordination, group_variable = "EC.4.1.99.1_Tryptophanase") +
   scale_color_gradientn(colours = cont_pal, guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F)) +
     ggtitle("EC.4.1.99.1_Tryptophanase \n (relative abundance)") +
     ggsave3("indole_analysis/EC.4.1.99.1_Tryptophanase_NMDS_alt_col.pdf", device = "pdf", dpi = 300, height = 4, width = 5.5)
 ```
 
+
 ### Taxonomic composition 
 
+Mean by group
+
 ```{r, fig.height=8, fig.width=14}
-metaphlan_species <- ps_arrange(metaphlan_species, "severity_score")
-p <- plot_taxonomic_comp(metaphlan_species, "Species", "severity", n_taxa = 14, ord=c("sham", "moderate", "severe")) + 
+metaphlan_ileum <- ps_arrange(metaphlan_ileum, "severity_score")
+p <- plot_taxonomic_comp(metaphlan_ileum, "Species", "severity", n_taxa = 14, ord=c("mild", "moderate", "severe")) + 
   theme(strip.background = element_rect(fill="white", color = "black"),
         strip.text = element_text(size=18))
 print(p)
 ```
+
+
+```{r}
+metaphlan_genus <- aggregate_taxa(metaphlan_ileum, level="Genus")
+
+p <- plot_taxonomic_comp(metaphlan_genus, "Genus", "severity",merge=T, n_taxa = 10, ord=c("mild", "moderate", "severe")) + 
+  theme(strip.background = element_rect(fill="white", color = "black"),
+        strip.text = element_text(size=18))
+print(p)
+ggsave("tax_figures/taxonomic_comp_merged_by_group.pdf", device=cairo_pdf, dpi=300, height=5, width=5.25)
+```
+
+
 
 ```{r, fig.height=8, fig.width=14}
 metaphlan_species_stroke <- ps_arrange(metaphlan_species, "severity_score") %>% 
@@ -228,286 +429,451 @@ ggsave(filename = "tax_figures/taxonomic_comp_fMCAO_metaphlan.pdf", width = 14, 
 
 ### Filtering 
 
+Select ileum data for FC analysis
 ```{r}
-metaphlan_species_filt <- metaphlan_species %>% 
-  microViz::tax_filter(min_prevalence = 0.33, prev_detection_threshold = 0, min_sample_abundance =1e-3, use_counts = F) 
+metaphlan_species_il_filt <- metaphlan_species %>% 
+  subset_samples(sample_type == "ileum") %>% 
+  microViz::tax_filter(min_prevalence = 0.33, prev_detection_threshold = 0, min_sample_abundance =1e-6, use_counts = F) 
 ```
+
 
 Full dataset - not excluding the extreme samples with severe weight loss
 
 consider adjusting for severity instead of separating 
 
-### All 
-```{r, message=FALSE, echo=FALSE, warning=FALSE}
-maaslin2_tax(metaphlan_species_filt, out = "tax_figures/maaslin2_species_all", fixed = "condition", max_significance = 0.1)
-```
-### Sham vs moderate
+#### Fold change 
 
-Excluding extreme samples 
+
+```{r}
+get_species <- function(df, col) {
+  df_copy <- df
+  df_copy[[col]] <- sub(".*\\|", "", df_copy[[col]])
+  return(df_copy)
+}
+
+ggsave3 <- function(...) {
+  ggplot2::ggsave(...)
+  invisible()
+}
+```
+
+Plot volcano from functional analysis script differs from taxonomic analysis one and this will fail with x matched by multiple actual arguments error if functional script sourced above after taxonomic. Either differentiate between the two or make them the same. 
+```{r}
+volcano_pal <- c("#E16036", "#466365", "#D6D6D6")
+fc_res <- tax_fold_change(metaphlan_species_il_filt, var = "condition", case = "fMCAO", ctrl = "sham")
+plot_volcano(results_df=fc_res, pthresh=0.1, FCthresh=0.58, x="log2FC", y="p.adj", groups=c("Sham", "fMCAO"), pal=volcano_pal) +
+  geom_text_repel(
+    inherit.aes = FALSE,
+    data = filter(
+      get_species(fc_res$res %>%
+    rownames_to_column("taxonomy"), "taxonomy"),
+      p.adj < 0.1 & abs(log2FC) > 1
+    ),
+    size = 3,
+    max.overlaps = 10,
+    aes(x = log2FC, y = -log10(p.adj), label = taxonomy)
+  )
+ggsave("tax_figures/volcano_shamvsfmcao.pdf", dpi = 300, height = 5, width = 6)
+```
 
 ```{r, message=FALSE, echo=FALSE, warning=FALSE}
-metaphlan_species_moderate <- metaphlan_species_filt %>% 
-  subset_samples(severity != "severe") 
-maaslin2_tax(metaphlan_species_moderate, out = "tax_figures/maaslin2_species_moderate", fixed = "condition", max_significance = 0.1)
+fc_res_moderate <- tax_fold_change(subset_samples(metaphlan_species_il_filt, severity != "severe"), var = "condition", case = "fMCAO", ctrl = "sham")
 ```
+
+
+### Sham vs severe
 
 #### Fold change 
 
 ```{r, message=FALSE, echo=FALSE, warning=FALSE}
-fc_res_moderate <- tax_fold_change(subset_samples(metaphlan_species_filt, severity != "severe"), var = "condition", case = "fMCAO", ctrl = "sham")
-```
-
-
-Final plot 
-
-```{r}
-fc_res_moderate_sig <- fc_res_moderate$res %>% 
-  filter(p.adj <= 0.1) %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  rownames_to_column("taxon") %>% 
-  mutate(taxon = factor(taxon, levels = unique(taxon))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "fMCAO")) %>% 
-  separate(taxon, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = "\\|")
-
-```
-
-```{r}
-ggplot(fc_res_moderate_sig, aes(x =da , y = fct_reorder(Species, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 16, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 16), 
-  legend.text = element_text(size = 14, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 16, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 6,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0, 12.5)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 6) + 
-  cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank()
-       ) + 
-  ylab("Taxon") + 
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.25, ymax = 20,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Moderate") +
-  theme(plot.title = element_text(hjust = 0.5))
-ggsave(filename = "tax_figures/fc_sham_vs_moderate.pdf", device = "pdf", dpi = 300,
-      height = 7, width=8)
-```
-
-
- ### Sham vs severe
-
-```{r, message=FALSE, echo=FALSE, warning=FALSE}
-metaphlan_species_severe <- metaphlan_species_filt %>% 
-  subset_samples(severity != "moderate") 
-maaslin2_tax(metaphlan_species_severe, out = "tax_figures/maaslin2_species_severe", fixed = "condition", max_significance = 0.1)
-```
-#### Fold change 
-
-```{r, message=FALSE, echo=FALSE, warning=FALSE}
-fc_res_severe <- tax_fold_change(subset_samples(metaphlan_species_filt, severity != "moderate"), var = "condition", 
+fc_res_severe <- tax_fold_change(subset_samples(metaphlan_species_il_filt, severity != "moderate"), var = "condition", 
                  case = "fMCAO", ctrl = "sham")
 ```
 
-Final plot 
+
+Mild vs Moderate, Moderate vs Severe 
+```{r}
+fc_strat <- bind_rows(
+  fc_res_moderate$res %>%
+    rownames_to_column("taxonomy") %>%
+    mutate(comparison = "Mild vs Moderate"),
+  fc_res_severe$res %>%
+    rownames_to_column("taxonomy") %>%
+    mutate(comparison = "Mild vs Severe")
+)
+
+volcano_strat <- plot_volcano(
+  results_df = fc_strat,
+  pthresh = 0.1,
+  FCthresh = 0.58,
+  x = "log2FC",
+  y = "p.adj",
+  groups = c("Mild", "Moderate"),
+  pal = volcano_pal
+) +
+  facet_grid(~comparison) +
+  geom_text_repel(
+    inherit.aes = FALSE,
+    data = filter(
+      get_species(fc_strat, "taxonomy"),
+      p.adj < 0.1 & abs(log2FC) > 1
+    ),
+    size = 4,
+    max.overlaps = 15,
+    aes(x = log2FC, y = -log10(p.adj), label = taxonomy)
+  )
+volcano_strat
+ggsave("tax_figures/volcano_strat.pdf", dpi = 300, height = 5, width = 10)
+```
+
+Diverging bar for Log2 FC
 
 ```{r}
-fc_res_severe_sig <- fc_res_severe$res %>% 
-  filter(p.adj <= 0.1) %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  rownames_to_column("taxon") %>% 
-  mutate(taxon = factor(taxon, levels = unique(taxon))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "fMCAO")) %>% 
-  separate(taxon, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = "\\|") %>% 
-  group_by(Group) %>% 
-  slice_max(abs(log2FC), n= 20)
+# , , "#C2C5C5FF", "#AE123AFF", "#E4C7C1FF"
+pval_colors <- c("#889296FF", "#A7ADAEFF", "#949C9FFF", "#F59885FF", "#ED5F55FF", "#DB3842FF", "#D13140FF")
+pvals <- c(0.00, 0.30, 0.60, 1, 1.3,1.60, 1.9, 2.25)
 ```
 
 ```{r}
-ggplot(fc_res_severe_sig, aes(x =da , y = fct_reorder(Species, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 16, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 16), 
-  legend.text = element_text(size = 14, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 16, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 6.5,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0, 13.5)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 6.5) +
-  guides(size=guide_legend(override.aes = list(fill="#D7D6D6", color="#D7D6D6"))) +
-  cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank()
-       ) + 
-  ylab("Taxon") + 
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 20.5, ymax = 21.5,
-           alpha = .1,fill = "#F7921E") +
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.5, ymax = 20.5,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Severe") +
-  theme(plot.title = element_text(hjust = 0.5))
-ggsave(filename = "tax_figures/fc_sham_vs_severe.pdf", device = "pdf", dpi = 300,
-      height = 7, width=8)
+colpal2 <- c(cols[3:5], "lightgrey")
+names(colpal2) <- c("mild", "moderate", "severe", "ns")
+fc_strat %>%
+  mutate(enrichment = case_when(log2FC < 1 ~ "depleted",
+  log2FC > 1 ~ "enriched")) %>% 
+  # filter to top 10+
+  group_by(comparison, enrichment) %>%
+    mutate(`-log10(qval)` = -log10(p.adj)) %>% 
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  mutate(Species = sub(".*\\|", "", taxonomy)) %>%
+  mutate(
+    signif = case_when(
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Moderate" ~ "mild",
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Severe" ~ "mild",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Moderate" ~ "moderate",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Severe" ~ "severe",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  ggplot(aes(x = log2FC, y = reorder_within(Species, log2FC, comparison), fill = `-log10(qval)`)) +
+  geom_col() +
+  scale_y_reordered() +
+  theme_cowplot() +
+ scale_fill_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(pvals),
+  limits = c(0, 2.25)
+) + 
+  #paletteer::scale_fill_paletteer_c("ggthemes::Red-Black Diverging", direction=-1) + 
+  theme(panel.border = element_blank(), axis.line = element_line()) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18, face = "italic"),
+    axis.title = element_text(size = 20),
+    strip.background = element_rect(fill="white", color="black"),
+    legend.text = element_text(size = 18)
+  ) +
+  xlab("Log2FC") +
+  ylab("") +
+  facet_wrap(vars(comparison), scales = "free")
+ggsave("tax_figures/fc_sham_vs_moderate_vs_severe_barplot-new_alternate.pdf", device = "pdf", dpi = 300, height = 5.5, width = 16)
 ```
+
+Diverging dotplot for Log2 FC
+
 ### Moderate vs severe
 
 ```{r}
-metaphlan_species_fMCAO <- metaphlan_species_filt %>% 
-  subset_samples(severity != "sham") 
-maaslin2_tax(metaphlan_species_fMCAO, out = "maaslin2_species_fMCAO", fixed = "severity", max_significance = 0.1)
+fc_res_mod_severe <- tax_fold_change(subset_samples(metaphlan_species_il_filt, severity != "mild"), var = "severity", 
+                 case = "moderate", ctrl = "severe")
 ```
-### Heatmap
-
-Get species intersect 
-```{r}
-species_overlap <- unique(c(fc_res_moderate_sig$Species, fc_res_severe_sig$Species))
-```
-
-
-```{r}
-df_hmap <- metaphlan_species_filt %>% 
-  psmelt() %>% 
-  filter(Species %in% species_overlap) %>%
-mutate(Rel_abundance = Abundance * 100) %>% 
-  group_by(Species, severity) %>% 
-  summarise(Mean_Abundance = mean(Abundance))
-
-df_hmap$severity <- factor( as.character(df_hmap$severity), levels=c("mild", "moderate", "severe"))
-
-df_hmap <- df_hmap[order(df_hmap$severity),]
-```
-
-
-
-Heatmap of colonisation
-
-```{r}
-hmap_mat <- df_hmap %>% 
-  select(Mean_Abundance, Species, severity) %>% 
-  pivot_wider(names_from=severity, values_from=Mean_Abundance) %>% 
-  column_to_rownames("Species") %>% 
-  as.matrix()
-
-col_an <- data.frame(row.names = colnames(hmap_mat), severity = colnames(hmap_mat))
-column_ha <- HeatmapAnnotation(df=col_an, col = list(severity = c("mild" = cols[[3]], "moderate" = cols[[4]], "severe" = cols[[5]]))) 
-```
-
-Order rows 
-```{r}
-row_ord <- c("s__Escherichia_coli", "s__Muribaculum_gordoncarteri", "s__GGB1576_SGB2167", "s__GGB24132_SGB35935","s__Paramuribaculum_intestinale", "s__Duncaniella_muris", "s__Bacteroides_muris",
-  "s__Adlercreutzia_muris","s__Candidatus_Arthromitus_sp_SFB_mouse", "s__Dubosiella_newyorkensis", "s__Duncaniella_freteri",  "s__Faecalibaculum_rodentium", "s__GGB14001_SGB21428", "s__GGB14013_SGB21440", "s__GGB25041_SGB36960", "s__GGB27861_SGB40295", "s__GGB27866_SGB40300", "s__GGB27873_SGB40307", "s__GGB27885_SGB40319", "s__GGB27890_SGB40324", "s__GGB27892_SGB40326", "s__GGB27893_SGB40327", "s__GGB28999_SGB41715", "s__GGB30045_SGB42945", "s__GGB46152_SGB63920", "s__GGB73359_SGB46611", "s__Granulimonas_faecalis", "s__Lactobacillus_johnsonii", "s__Lactobacillus_taiwanensis", "s__Muribaculaceae_bacterium", "s__Muribaculaceae_bacterium_Isolate_013_NCI", "s__Parasutterella_excrementihominis", "s__Prevotella_sp_PCHR", "s__Turicimonas_muris")
-
-```
-
-
-```{r, fig.height=3.5, fig.width=8}
-hmap_ord <- hmap_mat[, rownames(col_an)]
-hmap_ord <- hmap_ord[row_ord, ]
-rownames(hmap_ord) <- gsub("\\[.*", "", rownames(hmap_ord))
-hmap_log10 <- log10(hmap_ord + 1e-6)
-
-hm <- Heatmap(hmap_log10, top_annotation=column_ha, cluster_columns=F,cluster_rows = F, show_column_names=F, col=rev(RColorBrewer::brewer.pal(9, "RdBu")))
-hm
-p <- as.ggplot(grid.grabExpr(draw(hm, heatmap_legend_side = "right",annotation_legend_side = "right")))
-ggsave("tax_figures/da_taxa_metagenomic_mean.pdf", p, device = "pdf", width=8, height = 3.5, 
-       dpi=300)
-
-p
-```
-
 
 ### tnaA encoding 
 
 ```{r}
-# list comes from here: https://academic.oup.com/femsre/article/34/4/426/538792
-indole_species <-c("s__Akkermansia_muciniphila", "s__Escherichia_coli", "s__Escherichia", "s__Corynebacterium_acnes", "s__Enterococcus_faecalis", "s__Bacteroides_thetaiotaomicron", "s__Bacteroides eggerthii", "s__Bacteroides_ovatus", "s__Bacteroides_acidifaciens", "s__Bacteroides_xylanisolvens", "s__Bacteroides_stercoris", "s__Bacteroides_intestinalis", "s__Bacteroides_uniformis", "s__Bacteroides_luti", "s__Desulfovibrio_vulgaris", "s__Escherichia_albertii", "s__Escherichia_fergusonii", "s__Fusobacterium_nucleatum", "s__Klebsiella_oxytoca", "s__Porphyromonas_gingivalis")
+# list comes from here: http://eggnog5.embl.de/#/app/results#COG3033_datamenu
+indole_species <- read_csv("tnaA_encoding_taxa.csv")
+# remove those without species annotation - anything containing sp. or bacterium
+drop <- c("sp.", "bacterium") 
+indole_species <- indole_species %>% 
+  filter(!grepl(paste(drop, collapse="|"), Organism)) 
+# fix [] and add format to s__Genus_species
+indole_species <- indole_species$Organism
+
+indole_species <- gsub("\\[", "", indole_species)
+indole_species <- gsub("\\]", "", indole_species)
+
+indole_species <- gsub(" ", "_", indole_species)
+indole_species <- paste0("s__", indole_species)
+indole_species <- unique(indole_species)
 ```
 
 
 ```{r}
 metaphlan_species_indole <- metaphlan_species %>%
+  subset_samples(sample_type == "ileum") %>% 
   transform("arcsin") %>% 
-  ps_melt() %>% 
+  psmelt() %>% 
   filter(grepl(paste(indole_species, collapse = "|"), Species)) 
 
 ```
 
+```{r}
+metaphlan_species_indole %>% 
+  filter(severity != "severe") %>% 
+  filter(OTU == "k__Bacteria|p__Verrucomicrobia|c__Verrucomicrobiae|o__Verrucomicrobiales|f__Akkermansiaceae|g__Akkermansia|s__Akkermansia_muciniphila") %>% 
+  pairwise_wilcox_test(Abundance~severity)
+```
+
+```{r}
+metaphlan_species_indole %>% 
+  filter(severity != "moderate") %>% 
+  filter(OTU != "k__Bacteria|p__Firmicutes|c__Clostridia|o__Eubacteriales|f__Oscillospiraceae|g__Anaerotruncus|s__Anaerotruncus_colihominis") %>% 
+  group_by(OTU) %>% 
+  pairwise_wilcox_test(Abundance~severity)
+```
 
 ```{r}
 list_int_taxa <- unique(metaphlan_species_indole$OTU)
-indole_producer_plots <- map(list_int_taxa, function(x)
-  metaphlan_species_indole %>%
-    filter(OTU == x) %>%
+indole_producer_plots <- map(list_int_taxa, function(x) {
+  
+  dat <- metaphlan_species_indole %>%
+    filter(OTU == x) 
+  label <- gsub("s__","", unique(dat$Species))
+  label <- gsub("_", " ", label)
+
+  dat %>% 
     ggstripchart(
       x = "condition",
       y = "Abundance",
-      ylab = "arcsin transformed \n abundance",
+      ylab = paste0(label, "\n", "Asin(sqrt(rel. abundance))"),
       palette = cols,
       error.plot = "errorbar",
       color = "condition",
       add =c("mean_sd"),
-      size=3,
-      add.params = list(color = "black", size=0.25),
+      size=4,
+      alpha=0.75,
+      add.params = list(color = "black", size=0.5),
       order = c("sham", "fMCAO"),
-      position = position_jitterdodge(0.1),
-      title = unique(.$Species)
+      position = position_jitterdodge(0.1)
     ) +
+      theme(axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.title = element_blank()) + 
     stat_compare_means(comparisons = list(c("sham", "fMCAO")),
                        method = "wilcox.test",
-                       label = "p.format"))
-names(indole_producer_plots) <- c("A. muciniphila", "E. coli", "B. acidifaciens")
-imap(indole_producer_plots, function(.x, .y) ggsave(paste0("tax_figures/", .y, "_dotplot.pdf"), .x, device = "pdf", dpi=300, height = 4.5, width = 5))
+                       label = "p.format") +
+    stat_summary(fun = mean, geom = "errorbar",
+                 aes(ymax = after_stat(y), ymin = after_stat(y)),
+                 width = 0.2, 
+                 color = "black",
+                 size = 0.5) 
+} ) 
+
+ 
+indole_producer_plots
+names(indole_producer_plots) <- unique(metaphlan_species_indole$Species)
+imap(indole_producer_plots, function(.x, .y) ggsave(paste0("tax_figures/", .y, "_final_dotplot.pdf"), .x, device = cairo_pdf, dpi=300, height = 4, width = 3.75))
 ```
 ```{r}
-indole_producer_plots_sev <- map(list_int_taxa, function(x)
-  metaphlan_species_indole %>%
-    filter(OTU == x) %>%
+indole_producer_plots_sev <- map(list_int_taxa, function(x) {
+  
+  dat <- metaphlan_species_indole %>%
+    filter(OTU == x)
+  label <- gsub("s__","", unique(dat$Species))
+  label <- gsub("_", " ", label)
+
+  dat %>%
     ggstripchart(
       x = "severity",
       y = "Abundance",
-      ylab = "arcsin transformed \n abundance",
+      ylab = paste0(label, "\n", "Asin(sqrt(rel. abundance))"),
       palette = cols,
       error.plot = "errorbar",
       color = "severity",
       add =c("mean_sd"),
-      size=3,
-      add.params = list(color = "black", size=0.25),
-      order = c("sham", "moderate", "severe"),
-      position = position_jitterdodge(0.1),
-      title = unique(.$Species)
+      size=4,
+      alpha=0.75,
+      add.params = list(color = "black", size=0.5),
+      order = c("mild", "moderate", "severe"),
+      position = position_jitterdodge(0.1)
     ) +
-    stat_compare_means(comparisons = list(c("sham", "moderate"), c("sham", "severe"), c("moderate", "severe")),
+      theme(axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.title = element_blank()) + 
+    stat_compare_means(comparisons = list(c("mild", "moderate"), c("mild", "severe"), c("moderate", "severe")),
                        method = "wilcox.test",
-                       label = "p.format"))
-names(indole_producer_plots_sev) <- c("A. muciniphila", "E. coli", "B. acidifaciens")
-imap(indole_producer_plots_sev, function(.x, .y) ggsave(paste0("tax_figures/", .y, "_sev_dotplot.pdf"), .x, device = "pdf", dpi=300, height = 4.5, width = 5))
+                       label = "p.format") +
+    stat_summary(fun = mean, geom = "errorbar",
+                 aes(ymax = after_stat(y), ymin = after_stat(y)),
+                 width = 0.2, 
+                 color = "black",
+                 size = 0.5) 
+
+} )
+
+indole_producer_plots_sev
+names(indole_producer_plots_sev) <- unique(metaphlan_species_indole$Species)
+imap(indole_producer_plots_sev, function(.x, .y) ggsave(paste0("tax_figures/", .y, "_sev_dotplot.pdf"), .x, device = cairo_pdf, dpi=300, height = 4, width = 3.25))
 ```
 
+Plot E. coli individually 
+
+Use sample plot style etc for other indole producers below and facet by Species
+```{r}
+e_coli_dat <- metaphlan_species_indole %>%
+    filter(OTU == "k__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia|s__Escherichia_coli" )
+
+e_coli_dat %>%
+    ggstripchart(
+      x = "severity",
+      y = "Abundance",
+      ylab = "Escherichia coli \n Asin(sqrt(rel. abundance))",
+      palette = cols,
+      error.plot = "errorbar",
+      color = "severity",
+      add =c("mean_sd"),
+      size=4,
+      alpha=0.75,
+      add.params = list(color = "black", size=0.5),
+      order = c("mild", "moderate", "severe"),
+      position = position_jitterdodge(0.1)
+    ) +
+      theme(axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.title = element_blank()) + 
+    stat_compare_means(comparisons = list(c("mild", "severe"), c("moderate", "severe")),
+                       method = "wilcox.test",
+                       label = "p.format") +
+    stat_summary(fun = mean, geom = "errorbar",
+                 aes(ymax = after_stat(y), ymin = after_stat(y)),
+                 width = 0.2, 
+                 color = "black",
+                 size = 0.5) 
+ggsave(paste0("tax_figures/Escherichia_coli_sev_dotplot_final.pdf"), device = "pdf", dpi=300, height = 4, width = 3.75)
+```
+### ML regression 
 
 ```{r}
-da_sham_severe <- read_tsv("maaslin2_species_severe/significant_results.tsv") %>% 
-  slice_max(order_by = abs(coef), n = 20)
-da_sham_moderate <- read_tsv("maaslin2_species_moderate/significant_results.tsv") %>% 
-  slice_max(order_by = abs(coef), n = 20)
+library(SIAMCAT)
+library(ranger)
+```
+```{r}
+label <- create.label("severity_score",meta = meta_to_df(metaphlan_ileum))
+sc_ileum <- siamcat(phyloseq = metaphlan_ileum, label = label)
 ```
 
+Filtering and normalisation 
+```{r}
+sc_ileum <- filter.features(sc_ileum, filter.method = "abundance", cutoff = 1e-6) %>% 
+  filter.features(filter.method = "prevalence", cutoff = 0.1) %>%
+  normalize.features(norm.method = "log.std", norm.param = list(log.n0 = 1e-06, sd.min.q = 0.1))
+```
+
+```{r}
+sc_ileum <- create.data.split(sc_ileum, 
+                              num.folds = nsamples(metaphlan_ileum), 
+                              num.resample = 2) 
+
+sc_ileum <- sc_ileum %>% 
+  train.model(method="randomForest", measure="regr.rmse", verbose=3)
+```
+
+Model evaluation
+
+```{r}
+sc_ileum <- sc_ileum %>% 
+  make.predictions() %>%
+  evaluate.predictions()
+```
+
+```{r}
+model.evaluation.plot('Severity score'=sc_ileum, fn.plot="tax_figures/roc_curve_severity.pdf",
+    colours=c('orange'))
+model.interpretation.plot(sc_ileum, fn.plot="tax_figures/feat_severity.pdf",consens.thres = 0.001, max.show=50)
+```
+
+### Analysis stool 
+
+We do not see anything in terms of alpha-diversity in stool and shifts in composition are minimal. This fits with hypothesis that main changes are occuring in the ileum. However, we do want to show stool data in supplement. 
+
+```{r}
+metaphlan_stool <- metaphlan_species %>% 
+  subset_samples(sample_type == "stool") %>% 
+  transform()
+
+```
+```{r}
+metaphlan_genus_st <- aggregate_taxa(metaphlan_stool, level="Genus")
+
+p <- plot_taxonomic_comp(metaphlan_genus_st, "Genus", "severity",merge=T, n_taxa = 10, ord=c("mild", "moderate", "severe")) + 
+  theme(strip.background = element_rect(fill="white", color = "black"),
+        strip.text = element_text(size=18))
+print(p)
+ggsave("tax_figures/taxonomic_comp_merged_by_group_stool.pdf", device=cairo_pdf, dpi=300, height=5, width=5.25)
+```
+
+```{r}
+metaphlan_species_st_filt <- metaphlan_stool %>% 
+  microViz::tax_filter(min_prevalence = 0.33, prev_detection_threshold = 0, min_sample_abundance =1e-6, use_counts = F) 
+```
+
+```{r}
+fc_res_moderate_st <- tax_fold_change(subset_samples(metaphlan_species_st_filt, severity != "severe"), var = "condition", case = "fMCAO", ctrl = "sham")
+fc_res_severe_st <- tax_fold_change(subset_samples(metaphlan_species_st_filt, severity != "moderate"), var = "condition", 
+                 case = "fMCAO", ctrl = "sham")
+```
+
+```{r}
+fc_strat_st <- bind_rows(
+  fc_res_moderate_st$res %>%
+    rownames_to_column("taxonomy") %>%
+    mutate(comparison = "Mild vs Moderate"),
+  fc_res_severe_st$res %>%
+    rownames_to_column("taxonomy") %>%
+    mutate(comparison = "Mild vs Severe")
+)
+colpal2 <- c(cols[3:5], "lightgrey")
+names(colpal2) <- c("mild", "moderate", "severe", "ns")
+fc_strat_st %>%
+  mutate(enrichment = case_when(log2FC < 1 ~ "depleted",
+  log2FC > 1 ~ "enriched")) %>% 
+  # filter to top 10+
+  group_by(comparison, enrichment) %>%
+    mutate(`-log10(qval)` = -log10(p.adj)) %>% 
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  mutate(Species = sub(".*\\|", "", taxonomy)) %>%
+  mutate(
+    signif = case_when(
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Moderate" ~ "mild",
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Severe" ~ "mild",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Moderate" ~ "moderate",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Severe" ~ "severe",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  ggplot(aes(x = log2FC, y = reorder_within(Species, log2FC, comparison), fill = `-log10(qval)`)) +
+  geom_col() +
+  scale_y_reordered() +
+  theme_cowplot() +
+ scale_fill_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(c(0.28, 0.6, 0.95, 1.0, 1.4, 1.7, 2.01)),
+  limits = c(0.28, 2.01)
+) + 
+  #paletteer::scale_fill_paletteer_c("ggthemes::Red-Black Diverging", direction=-1) + 
+  theme(panel.border = element_blank(), axis.line = element_line()) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18, face = "italic"),
+    axis.title = element_text(size = 20),
+    strip.background = element_rect(fill="white", color="black"),
+    legend.text = element_text(size = 18)
+  ) +
+  xlab("Log2FC") +
+  ylab("") +
+  facet_wrap(vars(comparison), scales = "free")
+ggsave("tax_figures/fc_sham_vs_moderate_vs_severe_barplot-stool.pdf", device = "pdf", dpi = 300, height = 5.5, width = 16)
+```
 

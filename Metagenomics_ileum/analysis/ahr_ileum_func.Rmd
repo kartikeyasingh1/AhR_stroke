@@ -45,483 +45,624 @@ bowtie2: very-sensitive
 Post-QC reads were profiled using HUMAnN 3.7 against the uniref50 database. 
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+library(tidytext)
 source("../../../Metagenomics/scripts/func_analysis.R")
-meta_path <- "../data/ahr_ileum_metadata.txt"
-ec_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv"
-ko_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_ko_unstratified.tsv"
-py_path <- "../data/humann/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv"
-uniref_path <- "../data/humann/merged_table/unstrat/humann_genefamilies_relab_unstratified.tsv"
+meta_path <- "../data/ahr_metadata-2025.txt"
+ec_path <- "../data/humann4/search_coverage_30/merged_table/unstrat/humann_genefamilies_ec_unstratified.tsv"
+ko_path <- "../data/humann4/search_coverage_30/merged_table/unstrat/humann_genefamilies_ko_unstratified.tsv"
+py_path <- "../data/humann4/search_coverage_30/merged_table/unstrat/humann_pathabundance_relab_unstratified.tsv"
+gbm_path <- "../data/humann4/search_coverage_30/merged_table/unstrat/GBM_abundance_default.tsv"
+#uniref_path <- "../data/humann_com/merged_table/unstrat/humann_genefamilies_relab_unstratified.tsv"
+outdir <- "func_figures_2025"
 conflicted::conflict_prefer_all("dplyr")
 conflicted::conflict_prefer_all("purrr")
-dir.create("func_figures", showWarnings = F)
 ```
+
+Sample exclusion
+
+"RD275-ileum", "M-21-ileum", "RD521-ileum" may need to be excluded 
+
+```{r}
+
+```
+
 
 ```{r}
 func_profile <- import_func_profile(meta = meta_path,
-                                    un = uniref_path,
                                     ec = ec_path, ko = ko_path,
                                     py = py_path, filter_ungrouped = T, 
-                                    read = T, renorm=T)
+                                    read = T, renorm=T, humann_version = 4, sum=1)
+
+func_profile_filt <- subset_samples_func(func_profile, sample_type == 'ileum') %>% 
+ filter_func(abund=1e-8, prev=0.1, renorm = F)  %>% 
+  transform_func("relative", sum=1) 
 ```
 
 ### Analysis 
 
-PCoA plot and feature (UNIREF, EC, KO nd PY) DA, specific indole metabolism focused analysis 
+PCoA plot and feature (UNIREF, EC, KO and PY) DA, specific indole metabolism focused analysis 
 
 
 With all samples 
 
 ```{r}
-cols <- c("sham" = "#424143","fMCAO" = "#F7921E")
-sev_cols <- c("sham" = "#424143",mild = "#424143", "moderate" = "#F7921E","severe" = "#D00000")
-```
-
-```{r}
-plot_pcoa(func_profile, what = "UNIREF", var = "condition", colours = cols)
-```
-```{r}
-plot_pcoa(func_profile, what = "KO", var = "condition", colours = cols, size=4)
-ggsave(filename = "func_figures/KO_PCoA.pdf", width = 9, height = 6, dpi=300, device = "pdf")
-```
-
-```{r}
-plot_pcoa(func_profile, what = "EC", var = "condition", colours = cols, size = 4, plot = "MDS")
-ggsave(filename = "func_figures/EC_PCoA.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+cols <- c("sham"= "#5E5E5E","fMCAO" = "#D00000",mild = "#5E5E5E", "moderate" = "#FF7E79","severe" = "#D00000")
 ```
 
 
 ```{r}
-plot_pcoa(func_profile, what = "pathways", var = "condition", colours = cols, size = 4)
-ggsave(filename = "func_figures/PY_PCoA.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+plot_pcoa(func_profile_filt, what = "KO", var = "condition", colours = cols, size=4)
+#ggsave(filename = paste0(outdir, "KO_PCoA.pdf"), width = 9, height = 6, dpi=300, device = "pdf")
 ```
 
 ```{r}
-plot_pcoa(func_profile, what = "KO", var = "severity", colours = sev_cols)
-ggsave(filename = "func_figures/KO_PCoA_sev.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+plot_pcoa(func_profile_filt, what = "EC", var = "condition", colours = cols, size = 4, plot = "MDS")
+#ggsave(filename = "func_figures/EC_PCoA.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+```
+
+
+```{r}
+plot_pcoa(transform_func(func_profile_filt, "arcsin"), what = "KO", var = "severity", colours = cols, size=4, add_ellipse=F) + 
+  geom_polygon(stat = "ellipse", aes(fill = severity), alpha = 0.1) 
+  ggsave(filename = "func_figures_2025/KO_PCoA_sev.pdf", width = 5.25, height = 4, dpi=300, device = "pdf")
 ```
 ```{r}
-plot_pcoa(func_profile, what = "EC", var = "severity", colours = sev_cols)
-ggsave(filename = "func_figures/EC_PCoA_sev.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+plot_pcoa(transform_func(func_profile_filt, "arcsin"), what = "EC", var = "severity", colours = cols, size=4, add_ellipse=F) + 
+  geom_polygon(stat = "ellipse", aes(fill = severity), alpha = 0.1) 
+  ggsave(filename = "func_figures_2025/EC_PCoA_sev.pdf", width = 5.25, height = 4, dpi=300, device = "pdf")
 ```
 
 ```{r}
-plot_pcoa(func_profile, what = "pathways", var = "severity", colours = sev_cols)
-ggsave(filename = "func_figures/PY_PCoA_sev.pdf", width = 9, height = 6, dpi=300, device = "pdf")
-```
-
-#### fMCAO comparison
-
-```{r}
-func_profile_fMCAO <- subset_samples_func(func_profile, "severity != 'mild'")
+plot_pcoa(func_profile_filt, what = "pathways", var = "severity", colours = cols)
+#ggsave(filename = "func_figures/PY_PCoA_sev.pdf", width = 9, height = 6, dpi=300, device = "pdf")
 ```
 
 ```{r}
-plot_pcoa(func_profile_fMCAO, what = "pathways", var = "severity", colours = sev_cols, size = 4)
-ggsave(filename = "func_figures/PY_PCoA_fMCAO.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+func_profile_filt_st <- subset_samples_func(func_profile, sample_type == 'stool') %>% 
+ filter_func(abund=1e-8, prev=0.1, renorm = F)  %>% 
+  transform_func("relative", sum=1) 
 ```
 
 ```{r}
-plot_pcoa(func_profile_fMCAO, what = "KO", var = "severity", colours = sev_cols)
-ggsave(filename = "func_figures/KO_PCoA_fMCAO.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+plot_pcoa(transform_func(func_profile_filt_st, "arcsin"), what = "KO", var = "severity", colours = cols, size=4, add_ellipse=F) + 
+  geom_polygon(stat = "ellipse", aes(fill = severity), alpha = 0.1) 
+  ggsave(filename = "func_figures_2025/KO_PCoA_sev_stool.pdf", width = 5.25, height = 4, dpi=300, device = "pdf")
 ```
+
 ```{r}
-plot_pcoa(func_profile_fMCAO, what = "EC", var = "severity", colours = sev_cols)
-ggsave(filename = "func_figures/EC_PCoA__fMCAO.pdf", width = 9, height = 6, dpi=300, device = "pdf")
+plot_pcoa(transform_func(func_profile_filt_st, "arcsin"), what = "EC", var = "severity", colours = cols, size=4, add_ellipse=F) + 
+  geom_polygon(stat = "ellipse", aes(fill = severity), alpha = 0.1) 
+  ggsave(filename = "func_figures_2025/EC_PCoA_sev_stool.pdf", width = 5.25, height = 4, dpi=300, device = "pdf")
 ```
 
 ## Pairwise-feature testing 
 
-### MaAsLin2
-
-#### Sham vs fMCAO 
-
-```{r}
-func_profile_filt <- filter_func(func_profile, abund=1e-4, prev=0.3,renorm = T)
-```
-
-
-UNIREF
-```{r}
-#maaslin2_func(func_profile_filt, feattype = "UNIREF", out = "maaslin2_UNIREF_all", fixed = "condition", max_significance=0.05, cores = 10)
-```
-
-
-KO
-```{r}
-maaslin2_func(func_profile_filt, feattype = "KO", out = "maaslin2_KO_all", fixed = "condition", max_significance=0.1)
-```
-
-EC
-```{r}
-maaslin2_func(func_profile_filt, feattype = "EC", out = "maaslin2_EC_all", fixed = "condition",max_significance=0.1)
-```
-PY
-```{r}
-maaslin2_func(func_profile_filt, feattype = "pathways", out = "maaslin2_PY_all", fixed = "condition", max_significance=0.1)
-```
-DA pathway figure as in Zhou et al 2022, Cell
-
-#### Sham vs Moderate 
-KO
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'severe'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "KO", out = "maaslin2_KO_moderate", fixed = "condition", max_significance=0.1)
-```
-
-EC
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'severe'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "EC", out = "maaslin2_EC_moderate", fixed = "condition", max_significance=0.1)
-```
-PY 
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'severe'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "pathways", out = "maaslin2_PY_moderate", fixed = "condition", max_significance=0.1)
-```
-
-
-#### Sham vs Severe 
-KO
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'moderate'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "KO", out = "maaslin2_KO_severe", fixed = "condition", max_significance=0.1)
-```
-
-EC
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'moderate'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "EC", out = "maaslin2_EC_severe", fixed = "condition", max_significance=0.1)
-```
-PY
-```{r}
-func_profile %>% 
-  subset_samples_func("severity != 'moderate'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  maaslin2_func(feattype = "pathways", out = "maaslin2_PY_severe", fixed = "condition", max_significance=0.1)
-```
-
 ### Feature fold change
 
-Pathway log2 FC - sham vs moderate
+KO log2 FC - sham vs moderate
 ```{r}
-sham_vs_moderate_PY <- func_profile %>% 
-  subset_samples_func("severity != 'severe'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
+sham_vs_moderate_KO <- func_profile_filt %>% 
+  subset_samples_func(severity != 'severe') %>% 
+  feat_fold_change(feat_type = "KO",var = "severity", case = "moderate", ctrl = "mild")
+```
+
+KO log2 FC - sham vs severe
+```{r}
+sham_vs_severe_KO <- func_profile_filt %>% 
+  subset_samples_func(severity != 'moderate') %>% 
+  feat_fold_change(feat_type = "KO",var = "severity", case = "severe", ctrl = "mild")
+```
+
+```{r}
+moderate_vs_severe_KO <- func_profile_filt %>% 
+  subset_samples_func(severity != 'mild') %>% 
+  feat_fold_change(feat_type = "KO",var = "severity", case = "severe", ctrl = "moderate")
+```
+
+PY analysis 
+
+```{r}
+sham_vs_moderate_PY <- func_profile_filt %>% 
+  subset_samples_func(severity != 'severe') %>% 
   feat_fold_change(feat_type = "pathways",var = "severity", case = "moderate", ctrl = "mild")
 ```
 
-EC log2 FC - sham vs moderate
 ```{r}
-sham_vs_moderate_EC <- func_profile %>% 
-  subset_samples_func("severity != 'severe'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  feat_fold_change(feat_type = "EC",var = "severity", case = "moderate", ctrl = "mild")
-```
-Pathway log2 FC - sham vs severe
-```{r}
-sham_vs_severe_PY <- func_profile %>% 
-  subset_samples_func("severity != 'moderate'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
+sham_vs_severe_PY <- func_profile_filt %>% 
+  subset_samples_func(severity != 'moderate') %>% 
   feat_fold_change(feat_type = "pathways",var = "severity", case = "severe", ctrl = "mild")
 ```
 
-EC log2 FC - sham vs severe
 ```{r}
-sham_vs_severe_EC <- func_profile %>% 
-  subset_samples_func("severity != 'moderate'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  feat_fold_change(feat_type = "EC",var = "severity", case = "severe", ctrl = "mild")
-```
-
-Pathway log2 FC - moderate vs severe
-```{r}
-moderate_vs_severe_PY <- func_profile %>% 
-  subset_samples_func("severity != 'mild'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
+moderate_vs_severe_PY <- func_profile_filt %>% 
+  subset_samples_func(severity != 'mild') %>% 
   feat_fold_change(feat_type = "pathways",var = "severity", case = "severe", ctrl = "moderate")
-```
-
-EC log2 FC - moderate vs severe
-```{r}
-moderate_vs_severe_EC <- func_profile %>% 
-  subset_samples_func("severity != 'mild'") %>% 
-filter_func(abund=1e-4, prev=0.33,renorm = T) %>% 
-  feat_fold_change(feat_type = "EC",var = "severity", case = "severe", ctrl = "moderate")
 ```
 
 #### Better DA plots 
 
-##### log2 FC - Pathways 
-
 ```{r}
-sham_vs_moderate_PY_sig <- sham_vs_moderate_PY$res %>%
-  filter(abs(log2FC) > 2 & p.adj < 0.05) %>% 
-    rownames_to_column("feature")
-
-sham_vs_moderate_PY_sig$feature <- gsub("\\.", " ", sham_vs_moderate_PY_sig$feature)
-sham_vs_moderate_PY_sig$feature <- gsub("_NA", "", sham_vs_moderate_PY_sig$feature)
-
-sham_vs_severe_PY_sig <- sham_vs_severe_PY$res %>%
-  filter(abs(log2FC) > 2 & p.adj < 0.05) %>%  
-    rownames_to_column("feature")
-
-sham_vs_severe_PY_sig$feature <- gsub("\\.", " ", sham_vs_severe_PY_sig$feature)
-sham_vs_severe_PY_sig$feature <- gsub("_NA", "", sham_vs_severe_PY_sig$feature)
+pval_colors <- c("#889296FF", "#A7ADAEFF", "#949C9FFF", "#F59885FF", "#ED5F55FF", "#DB3842FF", "#D13140FF")
+pvals <- c(0.00, 0.30, 0.60, 1, 1.3,1.60, 1.9, 2.25)
 ```
 
-No pathways or EC were significant (qval <0.05) for moderate vs severe comparison
+```{r}
+fc_strat <- bind_rows(
+  sham_vs_moderate_KO$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Mild vs Moderate"),
+  sham_vs_severe_KO$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Mild vs Severe"),
+  moderate_vs_severe_KO$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Moderate vs Severe")
+)
+
+fc_strat_py <- bind_rows(
+  sham_vs_moderate_PY$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Mild vs Moderate"),
+  sham_vs_severe_PY$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Mild vs Severe"),
+  moderate_vs_severe_PY$res %>%
+    rownames_to_column("feature") %>%
+    mutate(comparison = "Moderate vs Severe")
+)
+
+```
+
+Sorting by effect size 
+```{r}
+colpal2 <- c(cols[3:5], "lightgrey")
+names(colpal2) <- c("mild", "moderate", "severe", "ns")
+fc_strat %>%
+  mutate(enrichment = case_when(log2FC < 1 ~ "depleted",
+  log2FC > 1 ~ "enriched")) %>% 
+  # filter to top 10+
+  group_by(comparison, enrichment) %>%
+    mutate(`-log10(qval)` = -log10(p.adj)) %>% 
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  mutate(feature = gsub(",", ";", feature)) %>% 
+  mutate(KO = gsub(";.*$", "",feature)) %>%
+  mutate(
+    signif = case_when(
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Moderate" ~ "mild",
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Severe" ~ "mild",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Moderate" ~ "moderate",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Severe" ~ "severe",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  ggplot(aes(x = log2FC, y = reorder_within(KO, log2FC, comparison), fill = `-log10(qval)`)) +
+  geom_col() +
+  scale_y_reordered() +
+  theme_cowplot() +
+ scale_fill_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(pvals),
+  limits = c(0, 2.25)
+) + 
+  #paletteer::scale_fill_paletteer_c("ggthemes::Red-Black Diverging", direction=-1) + 
+  theme(panel.border = element_blank(), axis.line = element_line()) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18, face = "italic"),
+    axis.title = element_text(size = 20),
+    strip.background = element_rect(fill="white", color="black"),
+    legend.text = element_text(size = 18)
+  ) +
+  xlab("Log2FC") +
+  ylab("") +
+  facet_wrap(vars(comparison), scales = "free")
+ggsave("func_figures_2025/fc_KO-effsize.pdf", device = "pdf", dpi = 300, height = 5.5, width = 18)
+```
+
+selecting significant only 
 
 ```{r}
-sham_vs_moderate_PY_sig %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  mutate(feature = factor(feature, levels = unique(feature))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "moderate")) %>% 
-ggplot(aes(x =da , y = fct_reorder(feature, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 16, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 16), 
-  legend.text = element_text(size = 14, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 16, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 12.5,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0, 25)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 12.) + 
+fc_strat %>%
+  mutate(enrichment = case_when(log2FC < 1 & p.adj <= 0.1 ~ "depleted",
+  log2FC > 1 & p.adj <=0.1 ~ "enriched")) %>% 
+  filter(p.adj <= 0.1) %>% 
+  # filter to top 10+
+  group_by(comparison, enrichment) %>%
+    mutate(`-log10(qval)` = -log10(p.adj)) %>% 
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  mutate(feature = gsub(",", ";", feature)) %>% 
+  mutate(KO = gsub(";.*$", "",feature)) %>%
+  mutate(
+    signif = case_when(
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Moderate" ~ "mild",
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Severe" ~ "mild",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Moderate" ~ "moderate",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Severe" ~ "severe",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  ggplot(aes(x = log2FC, y = reorder_within(KO, log2FC, comparison), fill = `-log10(qval)`)) +
+  geom_col() +
+  scale_y_reordered() +
+  theme_cowplot() +
+ scale_fill_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(pvals),
+  limits = c(0, 2.25)
+) + 
+  #paletteer::scale_fill_paletteer_c("ggthemes::Red-Black Diverging", direction=-1) + 
+  theme(panel.border = element_blank(), axis.line = element_line()) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18, face = "italic"),
+    axis.title = element_text(size = 20),
+    strip.background = element_rect(fill="white", color="black"),
+    legend.text = element_text(size = 18)
+  ) +
+  xlab("Log2FC") +
+  ylab("") +
+  facet_wrap(vars(comparison), scales = "free")
+ggsave("func_figures_2025/fc_KO-pval.pdf", device = "pdf", dpi = 300, height = 5.5, width = 18)
+```
+
+Pathways  
+
+Fix names 
+```{r}
+fc_strat_py <- fc_strat_py %>% 
+  mutate(PY = str_extract(feature, "(?<=: ).*(?=_NA)"))
+```
+
+```{r}
+fc_strat_py %>%
+  mutate(enrichment = case_when(log2FC < 1 & p.adj <= 0.1 ~ "depleted",
+  log2FC > 1 & p.adj <=0.1 ~ "enriched")) %>% 
+  filter(p.adj <= 0.1) %>% 
+  # filter to top 10+
+  group_by(comparison, enrichment) %>%
+    mutate(`-log10(qval)` = -log10(p.adj)) %>% 
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  mutate(PY = str_wrap(PY, width = 30)) %>% 
+  mutate(
+    signif = case_when(
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Moderate" ~ "mild",
+      p.adj < 0.1 & log2FC < 0 & comparison == "Mild vs Severe" ~ "mild",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Moderate" ~ "moderate",
+      p.adj < 0.1 & log2FC > 0 & comparison == "Mild vs Severe" ~ "severe",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  ggplot(aes(x = log2FC, y = reorder_within(PY, log2FC, comparison), fill = `-log10(qval)`)) +
+  geom_col() +
+  scale_y_reordered() +
+  theme_cowplot() +
+ scale_fill_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(pvals),
+  limits = c(0, 2.25)
+)  +
+  #paletteer::scale_fill_paletteer_c("ggthemes::Red-Black Diverging", direction=-1) + 
+  theme(panel.border = element_blank(), axis.line = element_line()) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.text.y = element_text(size = 18, face = "italic"),
+    axis.title = element_text(size = 20),
+    strip.background = element_rect(fill="white", color="black"),
+    legend.text = element_text(size = 18)
+  ) +
+  xlab("Log2FC") +
+  ylab("") +
+  facet_wrap(vars(comparison), scales = "free") 
+ggsave("func_figures_2025/fc_PY-pval.pdf", device = "pdf", dpi = 300, height = 8.25, width = 18)
+```
+
+Different plot style
+
+```{r}
+
+```
+
+```{r}
+py_mild_moderate <- fc_strat_py %>% 
+  filter(p.adj <= 0.1, comparison == "Mild vs Moderate") %>% 
+  mutate(
+    enrichment = if_else(log2FC < 0, "depleted", "enriched"),
+    PY = str_wrap(PY, width = 30)
+  ) %>% 
+  group_by(enrichment) %>%
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  # Calculate rectangle positions
+  mutate(
+    is_depleted = log2FC < 0,
+    depleted_count = sum(is_depleted),
+    total_count = n()
+  ) %>%
+  ggplot(aes(x = 1, y = fct_reorder(PY, log2FC))) + 
+  geom_point(aes(fill = abs(log2FC)), alpha = 0.75, shape = 21, size = 10, color = "white") +
+  # Dynamic rectangle positioning
+  geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = 0.5, ymax = depleted_count + 0.5),
+  alpha = 0.2, fill = cols[3], inherit.aes = FALSE
+) +
+geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = depleted_count + 0.5, ymax = total_count + 0.5),
+  alpha = 0.2, fill = cols[4], inherit.aes = FALSE
+) +
+  scale_fill_gradient2(
+    low = "#FCEDED", mid = "#E14141", high = "#780101", 
+    midpoint = 12.5, limits = c(0, 25),
+    name = "Absolute log2FC",
+    guide = guide_colorbar(
+      frame.colour = "black", 
+      ticks.colour = "white", 
+      frame.linewidth = 0.75, 
+      ticks.linewidth = 0.75
+    )
+  ) + 
   cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.y = element_blank()
-       ) + 
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.5, ymax = 6.5,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Moderate") +
-  theme(plot.title = element_text(hjust = 0.5))
+  theme(
+    axis.line.x = element_blank(), 
+    axis.ticks.x = element_blank(),
+    axis.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(colour = "black", size = 16),
+    legend.position = "None",
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  coord_cartesian(clip = "off")
 
-ggsave(filename = "func_figures/log2FC_sham_vs_moderate_PY.pdf", device = "pdf", dpi = 300,
-      height = 10, width=12)
+py_mild_moderate
 ```
 
 ```{r}
-sham_vs_severe_PY_sig %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  mutate(feature = factor(feature, levels = unique(feature))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "severe")) %>% 
-ggplot(aes(x =da , y = fct_reorder(feature, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 30, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 30), 
-  legend.text = element_text(size = 28, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 30, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 15,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0, 30)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 15) + 
+py_mild_severe <- fc_strat_py %>% 
+  filter(p.adj <= 0.1, comparison == "Mild vs Severe") %>% 
+  mutate(
+    enrichment = if_else(log2FC < 0, "depleted", "enriched"),
+    PY = str_wrap(PY, width = 30)
+  ) %>% 
+  group_by(enrichment) %>%
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  # Calculate rectangle positions
+  mutate(
+    is_depleted = log2FC < 0,
+    depleted_count = sum(is_depleted),
+    total_count = n()
+  ) %>%
+  ggplot(aes(x = 1, y = fct_reorder(PY, log2FC))) + 
+  geom_point(aes(fill = abs(log2FC)), alpha = 0.75, shape = 21, size = 10, color = "white") +
+  # Dynamic rectangle positioning
+  geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = 0.5, ymax = depleted_count + 0.5),
+  alpha = 0.2, fill = cols[3], inherit.aes = FALSE
+) +
+geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = depleted_count + 0.5, ymax = total_count + 0.5),
+  alpha = 0.2, fill = cols[5], inherit.aes = FALSE
+) +
+  scale_fill_gradient2(
+    low = "#FCEDED", mid = "#E14141", high = "#780101", 
+    midpoint = 12.5, limits = c(0, 25),
+    name = "Absolute log2FC",
+    guide = guide_colorbar(
+      frame.colour = "black", 
+      ticks.colour = "white", 
+      frame.linewidth = 0.75, 
+      ticks.linewidth = 0.75
+    )
+  ) + 
   cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.y = element_blank()
-       ) + 
-   annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 66.5, ymax = 67.5,
-           alpha = .1,fill = "#F7921E") +
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.25, ymax = 66.4,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Severe") +
-  theme(plot.title = element_text(hjust = 0.5))
-
-ggsave(filename = "func_figures/log2FC_sham_vs_severe_PY.pdf", device = "pdf", dpi = 300,
-      height = 20, width=23.5)
-
+  theme(
+    axis.line.x = element_blank(), 
+    axis.ticks.x = element_blank(),
+    axis.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(colour = "black", size = 16),
+    legend.position = "None",
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  coord_cartesian(clip = "off")
+py_mild_severe
 ```
 
 
-##### log2 FC - EC
-
-##### Maaslin2 - Pathways
-
-filter by pval or coefficient? 
 ```{r}
-sig_res_py_all <- read_tsv("maaslin2_PY_all/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.58)
-
-
-sig_res_py_moderate <- read_tsv("maaslin2_PY_moderate/significant_results.tsv") %>% 
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.58)
-
-sig_res_py_severe <- read_tsv("maaslin2_PY_severe/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.58)
-
-# for interest check overlap
-overlap_py <- Reduce(intersect, list(sig_res_py_all$feature,
-                                  sig_res_py_moderate$feature,
-                                  sig_res_py_severe$feature))
-```
-```{r}
-sig_res_py_moderate$feature <- gsub("\\.", " ", sig_res_py_moderate$feature)
-sig_res_py_moderate$feature <- gsub("_NA", "", sig_res_py_moderate$feature)
-```
-
-```{r}
-sig_res_py_moderate %>% 
-  filter(qval <= 0.1) %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  mutate(feature = factor(feature, levels = unique(feature))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "moderate")) %>% 
-ggplot(aes(x =da , y = fct_reorder(feature, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 16, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 16), 
-  legend.text = element_text(size = 14, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 16, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 1.5,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0.5, 2.25)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 1.5) + 
+py_moderate_severe <- fc_strat_py %>% 
+  filter(p.adj <= 0.1, comparison == "Moderate vs Severe") %>% 
+  mutate(
+    enrichment = if_else(log2FC < 0, "depleted", "enriched"),
+    PY = str_wrap(PY, width = 30)
+  ) %>% 
+  group_by(enrichment) %>%
+  slice_max(abs(log2FC), n = 10) %>%
+  ungroup() %>% 
+  # Calculate rectangle positions
+  mutate(
+    is_depleted = log2FC < 0,
+    depleted_count = sum(is_depleted),
+    total_count = n()
+  ) %>%
+  ggplot(aes(x = 1, y = fct_reorder(PY, log2FC))) + 
+  geom_point(aes(fill = abs(log2FC)), alpha = 0.75, shape = 21, size = 10, color = "white") +
+  # Dynamic rectangle positioning
+  geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = 0.5, ymax = depleted_count + 0.5),
+  alpha = 0.2, fill = cols[4], inherit.aes = FALSE
+) +
+geom_rect(
+  data = . %>% slice(1),
+  aes(xmin = 0.75, xmax = 1.25, ymin = depleted_count + 0.5, ymax = total_count + 0.5),
+  alpha = 0.2, fill = cols[5], inherit.aes = FALSE
+) +
+  scale_fill_gradient2(
+    low = "#FCEDED", mid = "#E14141", high = "#780101", 
+    midpoint = 12.5, limits = c(0, 25),
+    name = "Absolute log2FC",
+    guide = guide_colorbar(
+      frame.colour = "black", 
+      ticks.colour = "white", 
+      frame.linewidth = 0.75, 
+      ticks.linewidth = 0.75
+    )
+  ) + 
   cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.y = element_blank()
-       ) + 
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 11.6, ymax = 22.5,
-           alpha = .1,fill = "#F7921E") +
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.25, ymax = 11.5,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Moderate") +
-  theme(plot.title = element_text(hjust = 0.5))
+  theme(
+    axis.line.x = element_blank(), 
+    axis.ticks.x = element_blank(),
+    axis.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(colour = "black", size = 16),
+    legend.text = element_text(size = 14, colour = "black"), 
+    legend.title = element_text(size = 16),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  coord_cartesian(clip = "off")
+py_moderate_severe
+```
 
-# ggsave(filename = "func_figures/fc_sham_vs_moderate_PY.pdf", device = "pdf", dpi = 300,
-#       height = 10, width=12)
-```
-```{r}
-sig_res_py_severe$feature <- gsub("\\.", " ", sig_res_py_severe$feature)
-sig_res_py_severe$feature <- gsub("_NA", "", sig_res_py_severe$feature)
-```
+Final PY plot 
 
 ```{r}
-sig_res_py_severe %>% 
-  filter(qval <= 0.1) %>% 
-  mutate(da = TRUE) %>% 
-  arrange(log2FC) %>%
-  mutate(feature = factor(feature, levels = unique(feature))) %>% 
-  mutate(Group = case_when(log2FC < 0 ~ "Sham",
-                           TRUE ~ "severe")) %>% 
-ggplot(aes(x =da , y = fct_reorder(feature, log2FC))) + 
-  geom_point(aes(fill=abs(log2FC), color = abs(log2FC)), alpha = 0.75, shape=21, size=10)  +
-  theme(legend.key=element_blank(), 
-  axis.text.x = element_text(colour = "black", size = 16, face = "bold", 
-                             angle = 90, vjust = 0.3, hjust = 1), 
-  axis.text.y = element_text(colour = "black", face = "bold", size = 16), 
-  legend.text = element_text(size = 14, face ="bold", colour ="black"), 
-  legend.title = element_text(size = 16, face = "bold"), 
-  panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
-  panel.background = element_rect(fill = "#FFFFFF"),
-  legend.position = "right") + 
-  scale_fill_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 1.5,
-                       guide = guide_colorbar(frame.colour = "black", ticks.colour = "white", frame.linewidth = 0.75, ticks.linewidth = 0.75, draw.ulim = F),limits=c(0.5, 2.25)) + 
-  scale_color_gradient2(low ="#FCEDED", mid = "#E14141", high = "#780101", midpoint = 1.5) + 
-  cowplot::theme_cowplot() + 
-  theme(axis.line.x = element_blank(), 
-        axis.ticks.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.title.y = element_blank()
-       ) + 
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 37.5, ymax = 45,
-           alpha = .1,fill = "#F7921E") +
-  annotate("rect", xmin = 0.75, xmax = 1.25, ymin = 0.25, ymax = 37.4,
-           alpha = .1,fill = "#424143") +
-  coord_cartesian(clip="off") + 
-  ggtitle("Sham vs Severe") +
-  theme(plot.title = element_text(hjust = 0.5))
-
-# ggsave(filename = "func_figures/fc_sham_vs_severe_PY.pdf", device = "pdf", dpi = 300,
-#       height = 14, width=16)
+final_py_plot <- cowplot::plot_grid(
+  py_mild_moderate + ggtitle("Mild vs Moderate"),
+  py_mild_severe + ggtitle("Mild vs Severe"),
+  py_moderate_severe + ggtitle("Moderate vs Severe"),
+  ncol = 3,
+  align = "hv"
+)
+final_py_plot
+ggsave("func_figures_2025/fc_PY-absFC.pdf", plot = final_py_plot, device = "pdf", dpi = 300, height = 6.5, width = 20)
 ```
 
-
-##### Maaslin2 -  EC
-
-EC
-```{r}
-sig_res_ec_all <- read_tsv("maaslin2_EC_all/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.32)
-
-sig_res_ec_moderate <- read_tsv("maaslin2_EC_moderate/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1)))%>% 
-  filter(abs(log2FC) >= 0.32)
-
-sig_res_ec_severe <- read_tsv("maaslin2_EC_severe/significant_results.tsv")  %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.32)
-
-overlap_ec <- Reduce(intersect, list(sig_res_ec_all$feature,
-                                  sig_res_ec_moderate$feature,
-                                  sig_res_ec_severe$feature))
-```
-```{r}
-sig_res_ko_all <- read_tsv("maaslin2_KO_all/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.32)
-
-sig_res_ko_moderate <- read_tsv("maaslin2_KO_moderate/significant_results.tsv") %>%
-  mutate(log2FC = log2(exp(coef * -1)))%>% 
-  filter(abs(log2FC) >= 0.32)
-
-sig_res_ko_severe <- read_tsv("maaslin2_KO_severe/significant_results.tsv")  %>%
-  mutate(log2FC = log2(exp(coef * -1))) %>% 
-  filter(abs(log2FC) >= 0.32)
-
-overlap_ko <- Reduce(intersect, list(sig_res_ko_all$feature,
-                                  sig_res_ko_moderate$feature,
-                                  sig_res_ko_severe$feature))
-```
-
-
-##### Figures 
+### GBM analysis 
 
 ```{r}
-
+gutbrain_modules <- read_tsv(gbm_path) %>% 
+  unite("GBM", Module:Description, sep=":") %>% 
+  column_to_rownames("GBM")
+# remove stool 
+gutbrain_modules <- gutbrain_modules %>% select(contains("ileum"))
 ```
 
+Here we want to test if any GBMs are associated with severity score 
+
+```{r}
+gutbrain_modules<- gutbrain_modules + 1e-10
+gutbrain_modules_rel <- t(100 * t(gutbrain_modules) / colSums(gutbrain_modules))
+gutbrain_modules_clr <- t(mixOmics::logratio.transfo(t(gutbrain_modules_rel), logratio = "CLR"))
+class(gutbrain_modules_clr) <- "matrix"
+```
+
+```{r}
+gutbrain_modules_df <- gutbrain_modules_clr %>%
+  as.data.frame() %>%
+  rownames_to_column("GBM") %>%
+  pivot_longer(-GBM)
+gutbrain_modules_df$name <- gsub("\\.", "-", gutbrain_modules_df$name)
+gutbrain_modules_df$name <- gsub("_merged_clean", "", gutbrain_modules_df$name)
+```
+
+Merge with metadata 
+
+```{r}
+# Join the dataframes
+gutbrain_modules_df_long <- gutbrain_modules_df %>%
+  left_join(func_profile_filt$Metadata %>% rownames_to_column("name"), by = "name")
+```
+Remove sham samples 
+
+```{r}
+gutbrain_modules_df_long <- gutbrain_modules_df_long %>% 
+  filter(condition !="sham") %>% 
+  filter(name != "RD521-ileum")
+```
+
+glm value ~ severity_score 
+```{r}
+gbm_res <-
+  data.frame(
+    feature = character(0),
+    coef = numeric(0),
+    std.err = numeric(0),
+    pval= numeric(0),
+    name=character(0),
+    qval=numeric(0),
+    N=numeric(0)
+  )
+
+for (i in unique(gutbrain_modules_df_long$GBM)) {
+  fit <- glm(
+    severity_score ~ value,
+    data = filter(gutbrain_modules_df_long, GBM == i),
+    family = gaussian(link = "identity")
+  )
+
+  # Extract coefficients summary
+  coef_summary <- summary(fit)$coefficients
+
+  # Get the data used in the model (handles NA removal automatically)
+  model_data <- fit$model
+
+  # Create the output dataframe
+  gbm_res <- bind_rows(gbm_res, data.frame(
+    feature = i, # or the OTU name
+    coef = coef_summary[-1, "Estimate"],
+    stderr = coef_summary[-1, "Std. Error"],
+    pval = coef_summary[-1, "Pr(>|t|)"], # or "Pr(>|t|)" depending on family
+    name = paste(i, rownames(coef_summary)[-1], sep = "_"),
+    qval = NA, # calculate later with p.adjust()
+    N = nrow(model_data)
+  ))
+
+ 
+}
+
+ # Add q-values (FDR correction)
+gbm_res$qval <- p.adjust(gbm_res$pval, method = "BH")
+```
+
+GBM plot 
+
+```{r}
+sig_gbm <- gbm_res %>% 
+  filter(qval < 0.25) %>% 
+  mutate(enrichment = case_when(coef < 0 ~ "depleted",
+  coef > 0 ~ "enriched")) %>% 
+  group_by(enrichment) %>% 
+  slice_max(abs(coef), n=20) %>% 
+  ungroup()
+```
+
+```{r}
+sig_gbm %>% 
+  mutate(group = "group") %>% 
+  mutate(`-log10(qval)` = -log10(qval)) %>% 
+ggplot(aes(x= fct_reorder(feature, coef), y=group, size = abs(coef), color=`-log10(qval)`)) +
+    geom_point(alpha=0.5) +
+ scale_color_gradientn(
+  colours = pval_colors,
+  values = scales::rescale(pvals),
+  limits = c(0, 2.25)
+) +
+  theme_cowplot() + 
+  theme(axis.title.x= element_blank(),
+axis.title.y = element_text("          "), 
+  axis.text.y = element_blank())  +
+    scale_size(range = c(.5, 10)) +
+    rotate_x_text(45)
+ggsave("func_figures_2025/gbms_effsize_horizontal.pdf", device="pdf", dpi=300, height=6.5, width=15)
+```
 
 ### Specific indole genes
 
@@ -533,50 +674,35 @@ indole_ko <- indole_genes %>%
   drop_na(KO) %>% 
   pull(KO) %>% 
   unique()
+indole_ko <- paste0(indole_ko, "_")
 indole_ec <- indole_genes %>% 
   drop_na(EC) %>% 
   pull(EC)
 indole_ec <- stringr::str_conv(indole_ec, "UTF-8")
 indole_ec <- c(indole_ec, "4.1.1.115")
+indole_ec <- paste0("EC:", indole_ec, "_")
 ```
 
 ```{r}
-un_search_strings <- c(read_tsv("../data/indole_metabolism_uniref.txt") %>% 
-                         pull(UniRef50_id), indole_genes$Gene)
-un_search_strings <- stringr::str_conv(un_search_strings, "UTF-8")
-un_filt <- func_profile$UNIREF %>% 
-  select(contains(un_search_strings))
-
-ko_filt <- func_profile$KO %>% 
-  select(contains(c(indole_ko, indole_genes$Gene)))
-
-ec_filt_asin <- func_profile %>% 
-  transform_func("arcsin", features_are_rows = F) 
-ec_filt_asin <- ec_filt_asin$EC %>%
-  select(contains(indole_ec))
-
-ec_filt_rel <- func_profile$EC %>% 
-  select(contains(indole_ec))
-```
-```{r}
-dir.create("func_figures/indole_genes", showWarnings = F)
+ec_filt <- func_profile$EC %>% 
+  rownames_to_column("EC") %>% 
+  filter(grepl(paste(indole_ec, collapse="|"), EC)) %>% 
+  column_to_rownames("EC") %>% 
+  t_df()
 ```
 
 
 ```{r}
-ec_ind_gene <- c("EC:4.1.99.1_Tryptophanase", "EC:4.1.1.28_Aromatic-L-amino-acid decarboxylase", "EC:2.6.1.57_Aromatic-amino-acid transaminase", "EC:4.2.1.167_NA", "EC:1.1.1.399_NA", "EC:2.6.1.39_2-aminoadipate transaminase", "EC:2.6.1.5_Tyrosine transaminase", "EC:2.6.1.1_Aspartate transaminase")
-```
-
-
-```{r}
-for (i in colnames(ec_filt_asin)){
-  sub <- ec_filt_asin %>% select(i) %>% 
-    merge(func_profile$Metadata, by=0) %>% 
-    rename(ec = i)
+for (i in colnames(ec_filt)){
+  sub <- ec_filt %>% 
+    select(i) %>% 
+    merge(func_profile_filt$Metadata, by=0) %>% 
+    rename(ec = i) %>% 
+    mutate(ec = asin(sqrt(ec)))
    sub[, "condition"] <- factor(sub[, "condition"], levels = c("sham", "fMCAO"))
 
   p <- ggplot(sub, aes(x = condition, y = ec, color=condition)) + 
-    geom_jitter(position = position_jitterdodge(jitter.width = 0.1), size=3.75) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.15), size=3.75) + 
     scale_color_manual(values = cols) + 
     theme_cowplot() + 
     ylab(paste0(i, "\n", "Asin(sqrt(rel. abundance))")) +
@@ -589,26 +715,30 @@ for (i in colnames(ec_filt_asin)){
                fun.ymax = median, 
                geom = "crossbar", 
                width = 0.15, color="black") +
-  stat_compare_means(method = "wilcox.test", label = "p.format", comparisons = list(c("sham", "fMCAO")))
+  stat_compare_means(method = "wilcox.test", label = "p.format", comparisons = list(c("sham", "fMCAO"))) + 
+  EnvStats::stat_n_text()
+  name <- sub("_.*", "", i)
   name <- gsub(":", "_", i)
-  ggsave(paste0("func_figures/indole_genes/", name, ".pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 4.5)
+  ggsave(paste0(outdir, "/indole_genes/", name, "-2025.pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 4.5)
 }
 ```
 
 
 ```{r}
 comps <- microbiomeutilities::make_pairs(func_profile$Metadata$severity)
-for (i in colnames(ec_filt_asin)){
-  sub <- ec_filt_asin %>% select(i) %>% 
-    merge(func_profile$Metadata, by=0) %>% 
-    rename(ec = i)
+for (i in colnames(ec_filt)){
+  sub <- ec_filt %>% select(i) %>% 
+    merge(func_profile_filt$Metadata, by=0) %>% 
+    rename(ec = i) %>% 
+    mutate(ec = asin(sqrt(ec))) 
+
   sub[, "severity"] <- factor(sub[, "severity"], levels = c("mild", "moderate", "severe"))
 
   p <- ggplot(sub, aes(x = severity, y = ec, color=severity, label=Row.names)) + 
-    geom_jitter(position = position_jitterdodge(jitter.width = 0.1), size=3.75) + 
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.175), size=3.75, alpha=0.5) + 
    #ggrepel::geom_text_repel() + 
     theme_cowplot() + 
-    scale_color_manual(values = sev_cols)+ 
+    scale_color_manual(values = cols)+ 
     ylab(paste0(i, "\n", "Asin(sqrt(rel. abundance))")) +
     #ylab("rel. abundance") + 
     ggtitle(i) + 
@@ -620,9 +750,11 @@ for (i in colnames(ec_filt_asin)){
                fun.ymax = median, 
                geom = "crossbar", 
                width = 0.15, color="black") +
-  stat_compare_means(method = "wilcox.test", label = "p.format", comparisons = comps)
+  stat_compare_means(method = "wilcox.test", label = "p.format", comparisons = comps) + 
+  EnvStats::stat_n_text()
+  name <- sub("_.*", "", i)
   name <- gsub(":", "_", i)
-  ggsave(paste0("func_figures/indole_genes/", name, "_severity.pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 5)
+  ggsave(paste0(outdir, "/indole_genes/", name, "_severity.pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 5)
   print(p)
 }
 
@@ -630,12 +762,13 @@ for (i in colnames(ec_filt_asin)){
 Pairwise comparisons 
 ```{r}
 pairwise_comps <- list(c("mild", "moderate"), c("mild", "severe"), c("moderate", "severe"))
-for (i in colnames(ec_filt_asin)){
+for (i in colnames(ec_filt)){
   for (j in 1:length(pairwise_comps)){
-    sub <- ec_filt_asin %>% select(i) %>% 
-    merge(func_profile$Metadata, by=0) %>% 
+    sub <- ec_filt %>% select(i) %>% 
+    merge(func_profile_filt$Metadata, by=0) %>% 
     rename(ec = i) %>% 
-    filter(severity %in% pairwise_comps[[j]])
+    filter(severity %in% pairwise_comps[[j]]) %>% 
+    mutate(ec = asin(sqrt(ec)))
     
   comps <- microbiomeutilities::make_pairs(sub$severity)
   sub[, "severity"] <- factor(sub[, "severity"], levels = pairwise_comps[[j]])
@@ -645,7 +778,7 @@ for (i in colnames(ec_filt_asin)){
   p <- ggplot(sub, aes(x = severity, y = ec, color=severity, label=Row.names)) + 
     geom_jitter(position = position_jitterdodge(jitter.width = 0.1), size=3.75) + 
     theme_cowplot() + 
-    scale_color_manual(values = sev_cols)+ 
+    scale_color_manual(values = cols)+ 
     ylab(paste0(name, "\n", "Asin(sqrt(rel. abundance))")) +
     #ylab("rel. abundance") + 
     theme(axis.title = element_text(size=14),
@@ -657,9 +790,10 @@ for (i in colnames(ec_filt_asin)){
                geom = "crossbar", 
                width = 0.15, color="black") +
   stat_compare_means(method = "wilcox.test", label = "p.format", comparisons = comps)
+  name <- sub("_.*", "", i)
   name <- gsub(":", "_", i)
   comparison <- paste(pairwise_comps[[j]], collapse = "_")
-  ggsave(paste0("func_figures/indole_genes/", name, "_", comparison,  "_severity.pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 4.5)
+  ggsave(paste0("func_figures_2025/indole_genes/", name, "_", comparison,  "_severity.pdf"), plot = p, device = "pdf",dpi=300, height = 4, width = 4.5)
    print(p) 
   }
  
@@ -667,25 +801,123 @@ for (i in colnames(ec_filt_asin)){
 
 ```
 
+### Correlation of tnaA with severity
 
 ```{r}
-ec_filt_asin %>% select("EC:4.1.99.1_Tryptophanase") %>% 
-    merge(func_profile$Metadata, by=0) %>% 
+ec_filt %>% select(`EC:4.1.99.1_Tryptophanase`) %>% 
+    merge(func_profile_filt$Metadata, by=0) %>% 
   filter(condition != "sham") %>% 
   plot_scatter(x="severity_score", y="EC:4.1.99.1_Tryptophanase", line_color = "firebrick1", fill_color = "firebrick1", point_color = "firebrick1", xlab="Severity score", ylab="Asin(sqrt(rel. abundance))",corr.method = "spearman")
-ggsave("func_figures/indole_genes/tnaA_severity_cor.pdf", device = "pdf", dpi=300, height = 4, width = 5)
+ggsave("func_figures_2025/indole_genes/tnaA_severity_cor.pdf", device = "pdf", dpi=300, height = 4, width = 5)
 ```
 
 
+### Stratified 
+
+```{r}
+ec_strat <- read_tsv("../data/humann4/search_coverage_30/merged_table/humann_genefamilies_ec.tsv") %>% 
+  rename(contrib = `# Gene Family HUMAnN v4.0.0.alpha.1 Adjusted CPMs`) %>% 
+  pivot_longer(-contrib, names_to = "sampleID", values_to = "Abundance")
+ec_strat$sampleID <- gsub("_merged_clean", "", ec_strat$sampleID)
+```
+
+```{r}
+plot_contrib <- function(strat_profile, pattern, ylabel, mean=F) {
+  pattern <- paste0(pattern, "\\|")
+
+  strat_profile <- strat_profile %>% 
+    filter(grepl(pattern, contrib))
+  
+  if (mean == TRUE){
+    strat_profile <- strat_profile %>% 
+      group_by(severity, contrib) %>% 
+      summarise(Abundance = mean(Abundance))  %>%
+    ggplot(aes(fill = contrib, y = Abundance, x = severity)) +
+    geom_bar(position = "stack", stat = "identity") +
+    facet_grid(. ~ ~ factor(severity, levels = c("mild", "moderate", "severe")),
+               scales = "free_x",
+               space = "free_x") +
+    theme_classic() +
+    theme(
+      panel.spacing = unit(0, "pt"),
+      panel.border = element_rect(colour = "grey50", fill = NA)
+    ) +
+    scale_y_continuous(expand = c(0, 0)) +
+    paletteer::scale_fill_paletteer_d("ggsci::default_igv") + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.text = element_text(size = 14),
+      axis.title = element_text(size = 16),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 14),
+      strip.text = element_text(size = 14)
+    ) +
+    ylab(ylabel)
+  } else {
+
+    strat_profile %>%
+    ggplot(aes(fill = contrib, y = Abundance, x = sampleID)) +
+    geom_bar(position = "stack", stat = "identity") +
+    facet_grid(. ~ ~ factor(severity, levels = c("mild", "moderate", "severe")),
+               scales = "free_x",
+               space = "free_x") +
+    theme_classic() +
+    theme(
+      panel.spacing = unit(0, "pt"),
+      panel.border = element_rect(colour = "grey50", fill = NA)
+    ) +
+    scale_y_continuous(expand = c(0, 0)) +
+    paletteer::scale_fill_paletteer_d("ggsci::default_igv") + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.text = element_text(size = 14),
+      axis.title = element_text(size = 16),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 14),
+      strip.text = element_text(size = 14)
+    ) +
+    ylab(ylabel)
+  }
+  
+}
+```
+
+
+
+```{r}
+mild_samples <- func_profile_filt$Metadata %>% 
+  filter(severity == "mild") %>% 
+  rownames()
+moderate_samples <- func_profile_filt$Metadata %>% 
+  filter(severity == "moderate") %>% 
+  rownames()
+```
+
+```{r}
+ec_strat_meta <- ec_strat %>%
+  mutate(
+    severity = case_when(
+      sampleID %in% mild_samples ~ "mild",
+      sampleID %in% moderate_samples ~ "moderate",
+      TRUE ~ "severe"
+    )
+  ) 
+```
+
 #### Indole genes
  
-##### EC
+##### KO
 
 plot - tnaA
 
 ```{r}
 ec <- indole_genes$EC
 names(ec) <- indole_genes$Gene
+#ec <- c(ko, "low affinity tryptophan permease" = "K03836")
 ```
 
 ```{r}
@@ -693,6 +925,148 @@ ec_detected <- ec[ec %in% ec_strat_meta$contrib]
 ```
 
 
+Use code from above but adjust so values are converted to % and group low abundant into other 
 ```{r, fig.height=7, fig.width=12}
-imap(ec_detected,function(.x, .y) plot_contrib(ec_strat_meta, pattern = .x, ylabel = paste0(.y, "[RPK]")))
+#imap(ko_detected,function(.x, .y) plot_contrib(ko_strat_meta, pattern = .x, ylabel = paste0(.y, "[CPM]")))
+plot_contrib(ec_strat_meta, pattern = "K03836", ylabel = "Tryptophanase (tnaA) [CPM]", mean=T) + 
+  theme(legend.text = element_text(size=6))
+```
+
+```{r}
+pattern <- paste0("4.1.99.1", "\\|")
+
+# Set threshold for grouping low abundant species
+abundance_threshold <- 5  # Adjust this value as needed (e.g., 1% of composition)
+
+encoding_species <- ec_strat_meta %>%
+  filter(grepl(pattern, contrib)) %>%
+  group_by(severity, contrib) %>%
+  summarise(Abundance = mean(Abundance), .groups = "drop") %>%
+  # Calculate composition (convert to percentage)
+  group_by(severity) %>%
+  mutate(
+    total = sum(Abundance),
+    composition = (Abundance / total) * 100
+  ) %>%
+  ungroup() %>%
+  # Group low abundant species into "Other"
+  mutate(
+    contrib = ifelse(composition < 5, "Other", contrib)
+  ) %>%
+  # Recalculate after grouping
+  group_by(severity, contrib) %>%
+  summarise(composition = sum(composition), .groups = "drop") %>%
+  distinct(contrib) %>%
+  pull(contrib)
+```
+
+```{r}
+strat_pal <- c("#E4E9B2","#7E6148FF","#91D1C2FF","#E64B35FF", "#B09C85FF","#DCDCDC", "#F9A620","#054A29","#52414C" ,"#F39B7FFF", "white")
+names(strat_pal) <- encoding_species
+```
+
+```{r}
+
+ec_strat_meta %>% 
+  filter(grepl(pattern, contrib)) %>%
+  group_by(severity, contrib) %>% 
+  summarise(Abundance = mean(Abundance), .groups = "drop") %>%
+  # Calculate composition (convert to percentage)
+  group_by(severity) %>%
+  mutate(
+    total = sum(Abundance),
+    composition = (Abundance / total) * 100
+  ) %>%
+  ungroup() %>%
+  # Group low abundant species into "Other"
+  mutate(
+    contrib = ifelse(composition < abundance_threshold, "Other", contrib)
+  ) %>%
+  # Recalculate after grouping
+  group_by(severity, contrib) %>%
+  summarise(composition = sum(composition), .groups = "drop") %>% 
+ggplot(aes(fill = contrib, y = composition, x = severity)) +
+  geom_bar(position = "stack", stat = "identity") +
+  facet_grid(. ~ factor(severity, levels = c("mild", "moderate", "severe")),
+             scales = "free_x",
+             space = "free_x") +
+  theme_classic() +
+  theme(
+    panel.spacing = unit(0, "pt"),
+    panel.border = element_rect(colour = "grey50", fill = NA)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values= strat_pal) + 
+  theme(
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  ) +
+  ylab("Tryptophanase (tnaA) [%]")
+ggsave("func_figures_2025/tnaA_stratified_composition.pdf", device="pdf", height=5, width=9, dpi=300)
+```
+
+```{r}
+# Set threshold for grouping low abundant species
+abundance_threshold <- 1e-06  # Adjust this value as needed (absolute abundance units)
+
+encoding_species_cpm <- ec_strat_meta %>%
+  filter(grepl(pattern, contrib)) %>%
+  group_by(severity, contrib) %>%
+  summarise(Abundance = mean(Abundance), .groups = "drop") %>%
+  # Calculate composition (convert to percentage)
+  # Group low abundant species into "Other"
+  mutate(
+    contrib = ifelse(Abundance < abundance_threshold, "Other", contrib) 
+  ) %>%
+  # Recalculate after grouping
+  group_by(severity, contrib) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop") %>%
+  distinct(contrib) %>%
+  pull(contrib)
+
+strat_pal_cpm <- c("#F9A620", "#00A087FF","#054A29", "#E4E9B2","#7E6148FF","#91D1C2FF","#52414C", "#E64B35FF","#646464ff","#DCDCDC", "#DC0000FF", "#F39B7FFF", "#4DBBD5FF")
+#c(, , )
+names(strat_pal_cpm) <- encoding_species_cpm
+
+ec_strat_meta %>% 
+  filter(grepl(pattern, contrib)) %>%
+  group_by(severity, contrib) %>% 
+  summarise(Abundance = mean(Abundance), .groups = "drop") %>%
+  # Group low abundant species into "Other"
+  mutate(
+    contrib = ifelse(Abundance < abundance_threshold, "Other", contrib)
+  ) %>%
+  # Recalculate after grouping
+  group_by(severity, contrib) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop") %>% 
+ggplot(aes(fill = contrib, y = Abundance, x = severity)) +
+  geom_bar(position = "stack", stat = "identity") +
+  facet_grid(. ~ factor(severity, levels = c("mild", "moderate", "severe")),
+             scales = "free_x",
+             space = "free_x") +
+  theme_classic() +
+  theme(
+    panel.spacing = unit(0, "pt"),
+    panel.border = element_rect(colour = "grey50", fill = NA)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+    scale_fill_manual(values= strat_pal_cpm) + 
+  theme(
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  ) +
+  ylab("Tryptophanase (tnaA) [CPM]")
+ggsave("func_figures_2025/tnaA_stratified_cpm.pdf", device="pdf", height=5, width=9, dpi=300)
 ```
