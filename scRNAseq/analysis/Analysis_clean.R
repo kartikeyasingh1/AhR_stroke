@@ -139,3 +139,237 @@ Ahr <- ScaleData(object = Ahr, features = rownames(x = Ahr), vars.to.regress = c
 saveRDS(Ahr, "Ahr_integrated.rds")
 
 ## further analyses were performed on organs of interest separately ##
+
+# GSEA using the Gene Ontology (GO) database. 
+Ahr_lp -> Ahr 
+
+Layers(Ahr[["RNA"]])
+options(spe = c("mouse"))
+Ahr <- GeneSetAnalysisGO(Ahr, parent = "GO:0002376")
+matr <- Ahr@misc$AUCell$GO$"GO:0002376"
+matr <- RenameGO(matr)
+head(matr, 4:3)
+
+GeneSetAnalysisGO()
+SeuratExtend::Heatmap(CalcStats(matr, f = Ahr_lp_noNKnoRibo$seurat_clusters, order = "p", n = 3), lab_fill = "zscore")
+
+stats_cluster <- CalcStats(
+  matr,
+  f = Ahr$seurat_clusters,
+  order = "p",
+  n = 3
+)
+
+features_keep <- unique(rownames(stats_cluster))
+cluster_cond <- interaction(
+        Ahr$experiment,
+        Ahr$seurat_clusters,
+  sep = "_"
+)
+
+stats_final <- CalcStats(
+  matr[features_keep, ],
+  f = cluster_cond
+)
+SeuratExtend::Heatmap(
+  stats_final,
+  lab_fill = "zscore"
+)
+
+WaterfallPlot(matr, f = Ahr$experiment, ident.1 = "KO", ident.2 = "WT", top.n = 5)
+p <- WaterfallPlot(matr, f = Ahr$experiment,ident.1 = "KO",ident.2 = "WT",style = "segment", color_theme = "D", top.n = 5, len.threshold = 2)
+
+p + 
+  ggtitle(" Enriched Pathways (immune_system_process) in Ahr lp ") +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 9),
+    axis.text.y = element_text(size = 8)  # Smaller y-axis font
+  )
+
+
+# module score on a specific gene set #
+AddModuleScore(
+        Ahr,
+  features=gene_DCTolerance_merge_GOandLiterature_indata,
+  pool = NULL,
+  nbin = 24,
+  ctrl = 100,
+  k = FALSE,
+  assay = "RNA",
+  name = "Cluster",
+  seed = 1,
+  search = FALSE,
+  layer = "data"
+)
+
+Ahr <- AddModuleScore(
+        Ahr,
+  features = list(gene_DCTolerance_merge_GOandLiterature_indata),  
+  name = "gene_DCTolerance_merge_GOandLiterature_indata_Module"
+)
+
+VlnPlot(Ahr, features = "gene_DCTolerance_merge_GOandLiterature_indata_Module1", 
+        group.by = "seurat_clusters", cols=color_palette_lp_noNK, split.by = "experiment")
+
+
+# DELTA AHR module (KO-WT)
+df <- FetchData(
+        Ahr,
+  vars = c(
+    "gene_DCTolerance_merge_GOandLiterature_indata_Module1", 
+    "seurat_clusters",
+    "experiment", 
+    "sample"     
+  )
+)
+
+df_mouse <- df %>%
+  group_by(sample, experiment, seurat_clusters) %>%
+  summarise(
+    module_mean = mean(gene_DCTolerance_merge_GOandLiterature_indata_Module1),
+    .groups = "drop"
+  )
+
+sum_stats <- df_mouse %>%
+  group_by(seurat_clusters, experiment) %>%
+  summarise(
+    mean = mean(module_mean, na.rm = TRUE),
+    sd   = sd(module_mean, na.rm = TRUE),
+    n    = n(),
+    se   = sd / sqrt(n),
+    .groups = "drop"
+  ) %>%
+  select(seurat_clusters, experiment, mean, se) %>%
+  pivot_wider(names_from = experiment, values_from = c(mean, se))
+
+df_effect2 <- sum_stats %>%
+  mutate(
+    delta_KO_WT = mean_KO - mean_WT,
+    se_delta    = sqrt(se_KO^2 + se_WT^2)
+  ) %>%
+  select(seurat_clusters, delta_KO_WT, se_delta)
+
+df_stats <- df_mouse %>%
+  group_by(seurat_clusters) %>%
+  wilcox_test(module_mean ~ experiment, exact = FALSE) %>%
+  ungroup() %>%
+  mutate(p_adj = p.adjust(p, method = "BH")) %>%
+  select(seurat_clusters, p, p_adj)
+
+df_plot <- df_effect2 %>%
+  left_join(df_stats, by = "seurat_clusters") %>%
+  mutate(
+    seurat_clusters = factor(seurat_clusters),
+    sig = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01  ~ "**",
+      p_adj < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+df_plot <- df_plot %>%
+  arrange(delta_KO_WT) %>%
+  mutate(seurat_clusters = factor(seurat_clusters, levels = seurat_clusters))
+
+ggplot(df_plot, aes(x = seurat_clusters, y = delta_KO_WT)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_errorbar(aes(ymin = delta_KO_WT - se_delta,
+                    ymax = delta_KO_WT + se_delta),
+                width = 0.25) +
+  geom_point(size = 3) +
+  geom_text(aes(label = sig),
+            vjust = -1.1, size = 4) +
+  labs(
+    x = "Cluster",
+    y = expression(Delta*" AHR module (KO - WT)")
+  ) +
+  theme_classic()+ labs(
+    subtitle = "Mean ± SE of KO−WT difference per cluster; n = 3 mice per genotype\nWilcoxon tests per cluster; BH-FDR across clusters"
+  )
+
+# Sample-level stats for module score per cluster (KO vs WT)
+obj <- Ahr
+score_col   <- "gene_DCTolerance_merge_GOandLiterature_indata_Module1" 
+cluster_col <- "seurat_clusters"
+cond_col    <- "experiment"   
+sample_col  <- "sample"       
+
+md <- obj@meta.data
+
+df_sample <- md %>%
+  dplyr::select(all_of(c(sample_col, cond_col, cluster_col, score_col))) %>%
+  dplyr::filter(!is.na(.data[[score_col]])) %>%
+  dplyr::group_by(
+    sample    = .data[[sample_col]],
+    condition = .data[[cond_col]],
+    cluster   = .data[[cluster_col]]
+  ) %>%
+  dplyr::summarise(
+    score   = mean(.data[[score_col]], na.rm = TRUE),
+    n_cells = dplyr::n(),
+    .groups = "drop"
+  )
+
+sample_counts <- df_sample %>%
+  group_by(cluster, condition) %>%
+  summarise(n_samples = n_distinct(sample), .groups = "drop") %>%
+  pivot_wider(
+    names_from = condition,
+    values_from = n_samples,
+    values_fill = 0
+  ) %>%
+  arrange(cluster)
+print(sample_counts)
+
+eligible_clusters <- sample_counts %>%
+  filter(KO >= 3, WT >= 3) %>%
+  pull(cluster)
+
+message("Clusters retained for analysis: ",
+        paste(eligible_clusters, collapse = ", "))
+
+df_sample_filt <- df_sample %>%
+  filter(cluster %in% eligible_clusters)
+
+stats_tbl <- map_dfr(sort(unique(df_sample_filt$cluster)), function(cl) {
+  df_cl <- df_sample_filt %>% filter(cluster == cl)
+  tst <- wilcox_test(df_cl, score ~ condition)
+  tibble(
+    cluster = cl,
+    p = tst$p
+  )
+}) %>%
+  mutate(p.adj = p.adjust(p, method = "BH")) %>%
+  add_significance("p.adj")
+
+print(stats_tbl)
+
+p <- ggplot(
+  df_sample_filt,
+  aes(x = factor(cluster), y = score, fill = condition)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.35,
+    position = position_dodge(width = 0.8)
+  ) +
+  geom_point(
+    aes(size = n_cells, color = condition),
+    position = position_jitterdodge(
+      jitter.width = 0.15,
+      dodge.width = 0.8
+    ),
+    alpha = 0.85
+  ) +
+  scale_fill_manual(values = c("KO" = "darkgrey", "WT" = "firebrick")) +
+  scale_color_manual(values = c("KO" = "darkgrey", "WT" = "firebrick")) +
+  theme_classic() +
+  labs(
+    x = "Seurat cluster",
+    y = "Mean module score per sample",
+    size = "Cells in cluster"
+  )
+
+print(p)
+stats_tbl
+
